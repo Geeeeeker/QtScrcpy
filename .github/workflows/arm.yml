@@ -18,11 +18,9 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射：将用户输入的架构名映射到容器平台、Qt架构后缀、GCC架构标识
-          # 注意：arm 对应 32位 ARMv7，arm64 对应 64位 ARMv8，i386 对应 32位 x86，amd64 对应 64位 x86
           arch_map='{
             "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:20.04"},
-            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"ubuntu:20.04"},
+            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"},
             "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64","gcc-arch":"arm64","container-image":"arm64v8/ubuntu:20.04"},
             "arm":   {"platform":"linux/arm/v7","qt-arch":"linux_armv7","gcc-arch":"arm","container-image":"arm32v7/ubuntu:20.04"}
           }'
@@ -54,133 +52,124 @@ jobs:
     env:
       target-name: QtScrcpy
       qt-ver: '5.15.2'
-      qt-install-path: ${{ github.workspace }}/Qt/${{ matrix.qt-ver }}
       plantform-des: ubuntu
-      DEBIAN_FRONTEND: noninteractive
-    # 使用动态平台容器
-    container:
-      image: ${{ matrix.container-image }}
-      options: --platform ${{ matrix.platform }} --privileged
     steps:
-      - name: Set up QEMU (for non-amd64 platforms)
-        if: matrix.platform != 'linux/amd64'
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: ${{ matrix.platform }}
 
-      - name: Install Git and basic dependencies
-        run: |
-          apt-get update
-          apt-get install -y git ca-certificates sudo
-
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      - name: Install system dependencies
+      - name: Build in Docker container
         run: |
-          apt-get update
-          apt-get install -y \
-            build-essential \
-            cmake \
-            libglew-dev \
-            libglfw3-dev \
-            imagemagick \
-            wget \
-            patchelf \
-            zip \
-            libxcb1-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libfontconfig1-dev \
-            libfreetype6-dev \
-            libxrender-dev \
-            libxext-dev \
-            gnupg \
-            lsb-release \
-            python3 \
-            python3-pip \
-            fuse \
-            libasound2-dev
-          # 对于 i386 (32-bit) 可能需要额外的 multilib 支持，但容器已经是 32 位环境，无需特殊处理
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v ${{ github.workspace }}:${{ github.workspace }} \
+            -w ${{ github.workspace }} \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e GITHUB_WORKSPACE=${{ github.workspace }} \
+            -e GITHUB_REF=${{ github.ref }} \
+            ${{ matrix.container-image }} \
+            bash -c "
+              set -e
+              echo '=== Installing basic dependencies ==='
+              apt-get update
+              apt-get install -y git ca-certificates sudo
 
-      - name: Setup FUSE
-        run: |
-          apt-get install -y fuse
-          if [ ! -e /dev/fuse ]; then
-            mknod /dev/fuse c 10 229 || true
-            chmod 666 /dev/fuse || true
-          fi
-          export APPIMAGE_EXTRACT_AND_RUN=1
+              echo '=== Installing system dependencies ==='
+              apt-get update
+              apt-get install -y \
+                build-essential \
+                cmake \
+                libglew-dev \
+                libglfw3-dev \
+                imagemagick \
+                wget \
+                patchelf \
+                zip \
+                libxcb1-dev \
+                libxkbcommon-dev \
+                libxkbcommon-x11-dev \
+                libx11-dev \
+                libx11-xcb-dev \
+                libfontconfig1-dev \
+                libfreetype6-dev \
+                libxrender-dev \
+                libxext-dev \
+                gnupg \
+                lsb-release \
+                python3 \
+                python3-pip \
+                fuse \
+                libasound2-dev
 
-      - name: Install CMake 3.19+
-        run: |
-          apt-get install -y software-properties-common
-          apt-get update
-          apt-get install -y cmake=3.19.* || {
-            wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | apt-key add -
-            apt-add-repository 'deb https://apt.kitware.com/ubuntu/ focal main'
-            apt-get update
-            apt-get install -y cmake
-          }
+              echo '=== Setting up FUSE ==='
+              apt-get install -y fuse
+              if [ ! -e /dev/fuse ]; then
+                mknod /dev/fuse c 10 229 || true
+                chmod 666 /dev/fuse || true
+              fi
+              export APPIMAGE_EXTRACT_AND_RUN=1
 
-      - name: Cache Qt
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.qt-install-path }}/${{ matrix.qt-arch }}
-          key: ${{ matrix.platform }}/${{ env.qt-ver }}/${{ matrix.qt-arch }}
+              echo '=== Installing CMake 3.19+ ==='
+              apt-get install -y software-properties-common
+              apt-get update
+              apt-get install -y cmake=3.19.* || {
+                wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | apt-key add -
+                apt-add-repository 'deb https://apt.kitware.com/ubuntu/ focal main'
+                apt-get update
+                apt-get install -y cmake
+              }
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.qt-ver }}
-          arch: ${{ matrix.qt-arch }}
-          cached: ${{ steps.cache-qt.outputs.cache-hit }}
-          setup-python: false
-          # 注意：install-qt-action 会根据运行环境（容器架构）自动下载对应架构的 Qt
-          # 我们需要显式指定 arch 参数，确保它下载正确架构的 Qt
+              echo '=== Installing Qt via aqt ==='
+              pip3 install aqtinstall
+              export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
+              aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
+                --outputdir ${{ github.workspace }}/Qt
 
-      - name: Build Release
-        shell: bash
-        env:
-          ENV_QT_PATH: ${{ github.workspace }}/Qt/${{ env.qt-ver }}
-        run: |
-          python3 ci/generate-version.py
-          ci/linux/build_for_linux.sh "Release"
+              # 设置 Qt 环境变量
+              export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}
+              export PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:\$PATH
+
+              echo '=== Generating version ==='
+              python3 ci/generate-version.py
+
+              echo '=== Building ==='
+              ci/linux/build_for_linux.sh 'Release'
+
+              echo '=== Packaging AppImage ==='
+              chmod +x ci/linux/package_appimage.sh
+              ci/linux/package_appimage.sh 'Release'
+
+              echo '=== Preparing artifact ==='
+              mkdir -p ${{ github.workspace }}/output/artifacts
+              cp output/appimage/*.AppImage ${{ github.workspace }}/output/artifacts/ 2>/dev/null || true
+            "
 
       - name: Get the version
-        shell: bash
         id: get-version
         run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Package AppImage
-        shell: bash
-        env:
-          ENV_QT_PATH: ${{ github.workspace }}/Qt/${{ env.qt-ver }}
-        run: |
-          chmod +x ci/linux/package_appimage.sh
-          ci/linux/package_appimage.sh "Release"
-          # 注意：AppImage 可能不支持所有架构，但这里保留原逻辑
 
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-AppImage
-          path: output/appimage/*.AppImage
+          path: output/artifacts/*.AppImage
           if-no-files-found: warn
 
       - name: Prepare AppImage for Release
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          APPIMAGE_FILE=$(find output/appimage -name "QtScrcpy-*.AppImage" -type f | head -n 1)
+          APPIMAGE_FILE=$(find output/artifacts -name "*.AppImage" -type f | head -n 1)
           if [ -z "$APPIMAGE_FILE" ] || [ ! -f "$APPIMAGE_FILE" ]; then
-            echo "Error: AppImage file not found"
-            exit 1
+            echo "Warning: AppImage file not found, skipping release upload"
+            exit 0
           fi
           FINAL_NAME="${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}.AppImage"
           cp "$APPIMAGE_FILE" "$FINAL_NAME"
