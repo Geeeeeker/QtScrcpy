@@ -1,213 +1,35 @@
-name: Windows (Manual Dispatch)
+- name: Package with PowerShell
+  id: package
+  shell: powershell
+  env:
+    ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+    publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
+  run: |
+    $arch = "${{ matrix.msvc-arch }}"
+    $outDir = "$pwd\build\$env:publish_name"
+    Write-Host "Packaging to $outDir"
 
-on:
-  workflow_dispatch:
-    inputs:
-      architectures:
-        description: 'Comma-separated list of architectures to build (arm64, i386, amd64)'
-        required: true
-        default: 'arm64'
-        type: string
+    # 创建目录
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Generate matrix
-        id: set-matrix
-        run: |
-          arch_map='{
-            "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"win32_msvc2019"},
-            "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"win64_msvc2019_64"},
-            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"win64_msvc2019_arm64"}
-          }'
-          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
-          entries=()
-          for arch in "${archs[@]}"; do
-            arch=$(echo "$arch" | xargs)
-            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
-            if [[ -n "$entry" ]]; then
-              entries+=("$entry")
-            else
-              echo "⚠️ 忽略未知架构 '$arch'"
-            fi
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 没有有效架构"
-            exit 1
-          fi
-          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
-          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+    # 复制 keymap 和 config
+    Copy-Item -Path "keymap" -Destination "$outDir\" -Recurse -Force
+    Copy-Item -Path "config\config.ini" -Destination "$outDir\" -Force
 
-  build:
-    needs: prepare
-    name: Build ${{ matrix.msvc-arch }}
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    env:
-      target-name: QtScrcpy
-      vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
-      vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
-      qt-ver: '5.15.2'
-      qt-install-path: ${{ github.workspace }}/Qt
-      plantform-des: win
-    steps:
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          architecture: 'x64'
+    # 复制主程序
+    Copy-Item -Path "build\RelWithDebInfo\QtScrcpy.exe" -Destination "$outDir\" -Force
 
-      - name: Cache Qt
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.qt-install-path }}
-          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}-v3
+    # 运行 windeployqt（使用完整路径）
+    & "$env:ENV_QT_PATH\bin\windeployqt.exe" "--$arch" "$outDir\QtScrcpy.exe"
 
-      - name: Install aqt (if cache miss)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        run: pip install aqtinstall
+    # 复制 adb（根据实际路径调整）
+    if (Test-Path "ci\win\adb\$arch") {
+        Copy-Item -Path "ci\win\adb\$arch\*" -Destination "$outDir\" -Recurse -Force
+    }
 
-      - name: Set aqt mirror (清华源)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
+    # 列出内容
+    Get-ChildItem $outDir -Recurse
 
-      - name: Check available architectures for Qt ${{ env.qt-ver }}
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        id: check-arch
-        shell: bash
-        run: |
-          AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }})
-          echo "Available architectures: $AVAIL_ARCH"
-          if echo "$AVAIL_ARCH" | grep -q "${{ matrix.qt-arch }}"; then
-            echo "available=true" >> $GITHUB_OUTPUT
-          else
-            echo "available=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install Qt (manual)
-        if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
-        shell: bash
-        run: |
-          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
-            --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
-          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
-          # 动态查找 Qt5Config.cmake 的正确位置
-          QT5_CMAKE_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
-          if [ -n "$QT5_CMAKE_DIR" ]; then
-            echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
-            echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-            echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-          else
-            echo "⚠️ Qt5Config.cmake not found, using default paths."
-            echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
-            echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
-          fi
-          # 设置 CMAKE_PREFIX_PATH 为 Qt 根目录（关键）
-          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
-          echo "$QT_ROOT/bin" >> $GITHUB_PATH
-          echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV   # 供构建步骤使用
-
-      - name: Skip if architecture unavailable
-        if: steps.check-arch.outputs.available == 'false'
-        run: |
-          echo "Architecture ${{ matrix.qt-arch }} not available, skipping build."
-          exit 0
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: 'true'
-          ssh-key: ${{ secrets.BOT_SSH_KEY }}
-
-      - name: Verify Qt environment
-        shell: bash
-        run: |
-          echo "Qt5_DIR=$Qt5_DIR"
-          echo "QT_DIR=$QT_DIR"
-          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
-          echo "ENV_QT_PATH=$ENV_QT_PATH"
-          echo "PATH=$PATH"
-          if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
-            echo "✅ Qt5Config.cmake exists at $Qt5_DIR/Qt5Config.cmake"
-          else
-            echo "❌ Qt5Config.cmake not found"
-            find "${{ env.qt-install-path }}" -name "Qt5Config.cmake" 2>/dev/null || true
-          fi
-
-      - name: Build with CMake (direct)
-        shell: cmd
-        env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
-        run: |
-          call python ci\generate-version.py
-          call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%"
-          cmake --build . --config RelWithDebInfo
-          cd ..
-
-      # 调试步骤：列出构建产物
-      - name: List build output (debug)
-        shell: bash
-        run: |
-          echo "=== Build artifacts in build/RelWithDebInfo ==="
-          ls -la build/RelWithDebInfo/ || true
-          echo "=== Searching for exe ==="
-          find build -name "*.exe" 2>/dev/null || true
-
-      - name: Get the version
-        shell: bash
-        id: get-version
-        # 如果是从 tag 触发，则取 tag 名称；否则使用短 SHA
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF##*/}"
-          else
-            VERSION="$(git rev-parse --short HEAD)"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # 打包步骤：调用脚本并压缩
-      - name: Package
-        id: package
-        env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_VCINSTALL: ${{ env.vcinstall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
-          # 包名格式：包名-平台-架构-版本（可根据需求去掉版本）
-          publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
-        run: |
-          # 调用打包脚本，输出到 build\publish_name
-          # 注意：脚本需要将主程序、依赖库、adb 等复制到此目录
-          cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} build\${{ env.publish_name }}
-
-          # 压缩 build\publish_name 为 build\publish_name.zip
-          Compress-Archive -Path build\${{ env.publish_name }} -DestinationPath build\${{ env.publish_name }}.zip
-
-          echo "package-name=${{ env.publish_name }}" >> "$GITHUB_OUTPUT"
-
-      # 上传 artifact（无论是否 tag 都会上传，方便手动下载测试）
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.package-name }}.zip
-          path: build\${{ steps.package.outputs.package-name }}.zip
-
-      # 如果是 tag 触发，则发布到 Release
-      - name: Upload Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: build\${{ steps.package.outputs.package-name }}.zip
-          asset_name: ${{ steps.package.outputs.package-name }}.zip
-          tag: ${{ github.ref }}
-          overwrite: true
+    # 压缩
+    Compress-Archive -Path $outDir -DestinationPath "$pwd\build\$env:publish_name.zip" -Force
+    Write-Host "package-name=$env:publish_name" >> $env:GITHUB_OUTPUT
