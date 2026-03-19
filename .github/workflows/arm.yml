@@ -6,7 +6,7 @@ on:
       architectures:
         description: 'Comma-se-separated list of architectures to build (arm, arm64, i386, amd64)'
         required: true
-        default: 'amd64'
+        default: 'arm64'
         type: string
 
 jobs:
@@ -115,16 +115,6 @@ jobs:
                 chmod 666 /dev/fuse || true
               fi
               export APPIMAGE_EXTRACT_AND_RUN=1
-
-              echo '=== Installing CMake 3.19+ ==='
-              apt-get install -y software-properties-common
-              apt-get update
-              apt-get install -y cmake=3.19.* || {
-                wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | apt-key add -
-                apt-add-repository 'deb https://apt.kitware.com/ubuntu/ focal main'
-                apt-get update
-                apt-get install -y cmake
-              }
 
               echo '=== Installing Python and aqt ==='
               # 检测系统版本
