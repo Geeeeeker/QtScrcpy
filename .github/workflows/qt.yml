@@ -10,7 +10,7 @@ on:
         type: string
   push:
     tags:
-      - 'qt-*'        # 例如 qt-5.15.2-arm64
+      - 'qt-*'
 
 jobs:
   prepare:
@@ -21,14 +21,12 @@ jobs:
       - name: Validate and generate matrix
         id: set-matrix
         run: |
-          # aqt 官方提供的 Linux ARM 桌面架构只有 linux_arm64
           arch_map='{
             "arm64": {"runner":"ubuntu-24.04-arm", "gcc-arch":"arm64", "qt-arch":"linux_arm64"}
           }'
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           else
-            # tag 触发时默认构建 arm64
             archs=("arm64")
           fi
           entries=()
@@ -58,7 +56,7 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
-      QT_VERSION: '5.15.2'       # 静态版本号
+      QT_VERSION: '5.15.2'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,7 +69,6 @@ jobs:
             python3-venv \
             wget \
             xz-utils \
-            # Qt 运行时依赖
             libxcb-util1 \
             libxcb-icccm4 \
             libxcb-image0 \
@@ -111,10 +108,8 @@ jobs:
         run: |
           source ${{ github.workspace }}/venv/bin/activate
           sudo mkdir -p ${{ env.QT_INSTALL_DIR }}
-          # aqt 默认将 linux_arm64 安装到 /opt/Qt/5.15.2/gcc_64
           aqt install-qt linux desktop ${{ env.QT_VERSION }} ${{ matrix.qt-arch }} \
             --outputdir /opt/Qt
-          # 修正路径：移动到我们期望的目录
           if [ -d "/opt/Qt/${{ env.QT_VERSION }}/gcc_64" ]; then
             sudo mv /opt/Qt/${{ env.QT_VERSION }}/gcc_64 ${{ env.QT_INSTALL_DIR }}
           fi
