@@ -28,9 +28,16 @@ jobs:
           for arch in "${archs[@]}"; do
             arch=$(echo "$arch" | xargs)
             entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
-            if [[ -n "$entry" ]]; then entries+=("$entry"); else echo "⚠️ 忽略未知架构 '$arch'"; fi
+            if [[ -n "$entry" ]]; then
+              entries+=("$entry")
+            else
+              echo "⚠️ 忽略未知架构 '$arch'"
+            fi
           done
-          if [ ${#entries[@]} -eq 0 ]; then echo "❌ 没有有效架构"; exit 1; fi
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "❌ 没有有效架构"
+            exit 1
+          fi
           matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
@@ -60,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.qt-install-path }}
-          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}-v3   # 强制更新缓存
+          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}-v3
 
       - name: Install aqt (if cache miss)
         if: steps.cache-qt.outputs.cache-hit != 'true'
@@ -148,34 +155,59 @@ jobs:
           cmake --build . --config RelWithDebInfo
           cd ..
 
+      # 调试步骤：列出构建产物
+      - name: List build output (debug)
+        shell: bash
+        run: |
+          echo "=== Build artifacts in build/RelWithDebInfo ==="
+          ls -la build/RelWithDebInfo/ || true
+          echo "=== Searching for exe ==="
+          find build -name "*.exe" 2>/dev/null || true
+
       - name: Get the version
         shell: bash
         id: get-version
-        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+        # 如果是从 tag 触发，则取 tag 名称；否则使用短 SHA
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF##*/}"
+          else
+            VERSION="$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # 打包步骤：调用脚本并压缩
       - name: Package
         id: package
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
           ENV_VCINSTALL: ${{ env.vcinstall-path }}
           ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+          # 包名格式：包名-平台-架构-版本（可根据需求去掉版本）
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
-          cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} ..\build\${{ env.publish_name }}
-          Compress-Archive -Path ci\build\${{ env.publish_name }} ci\build\${{ env.publish_name }}.zip
+          # 调用打包脚本，输出到 build\publish_name
+          # 注意：脚本需要将主程序、依赖库、adb 等复制到此目录
+          cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} build\${{ env.publish_name }}
+
+          # 压缩 build\publish_name 为 build\publish_name.zip
+          Compress-Archive -Path build\${{ env.publish_name }} -DestinationPath build\${{ env.publish_name }}.zip
+
           echo "package-name=${{ env.publish_name }}" >> "$GITHUB_OUTPUT"
 
+      # 上传 artifact（无论是否 tag 都会上传，方便手动下载测试）
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.package-name }}.zip
-          path: ci\build\${{ steps.package.outputs.package-name }}
+          path: build\${{ steps.package.outputs.package-name }}.zip
 
+      # 如果是 tag 触发，则发布到 Release
       - name: Upload Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ci\build\${{ steps.package.outputs.package-name }}.zip
+          file: build\${{ steps.package.outputs.package-name }}.zip
           asset_name: ${{ steps.package.outputs.package-name }}.zip
           tag: ${{ github.ref }}
           overwrite: true
