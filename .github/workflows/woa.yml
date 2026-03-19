@@ -46,15 +46,15 @@ jobs:
     name: Build ${{ matrix.msvc-arch }}
     runs-on: windows-latest
     strategy:
-       matrix:
-       include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       target-name: QtScrcpy
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
       qt-ver: '5.15.2'
       qt-install-path: ${{ github.workspace }}/Qt
-      plantform-des: win
+      plantform-des: win   # 原项目写法，保留
     steps:
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -98,6 +98,7 @@ jobs:
             --outputdir ${{ env.qt-install-path }} \
             --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
           QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
+          # 查找 Qt5Config.cmake 的正确位置
           QT5_CMAKE_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
           if [ -n "$QT5_CMAKE_DIR" ]; then
             echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
@@ -124,47 +125,32 @@ jobs:
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      - name: Verify Qt environment
-        shell: bash
+      - name: Verify Qt environment (debug)
+        shell: cmd
         run: |
-          echo "Qt5_DIR=$Qt5_DIR"
-          echo "QT_DIR=$QT_DIR"
-          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
-          echo "ENV_QT_PATH=$ENV_QT_PATH"
-          echo "PATH=$PATH"
-          if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
-            echo "✅ Qt5Config.cmake exists at $Qt5_DIR/Qt5Config.cmake"
-          else
-            echo "❌ Qt5Config.cmake not found"
-            find "${{ env.qt-install-path }}" -name "Qt5Config.cmake" 2>/dev/null || true
-          fi
+          echo Qt5_DIR=%Qt5_DIR%
+          echo QT_DIR=%QT_DIR%
+          echo CMAKE_PREFIX_PATH=%CMAKE_PREFIX_PATH%
+          echo ENV_QT_PATH=%ENV_QT_PATH%
+          dir "%ENV_QT_PATH%\lib\cmake\Qt5" 2>nul || echo Qt5 cmake dir not found
 
-    - name: Debug environment variables
-      shell: cmd
-      run: |
-        echo Qt5_DIR=%Qt5_DIR%
-        echo QT_DIR=%QT_DIR%
-        echo CMAKE_PREFIX_PATH=%CMAKE_PREFIX_PATH%
-        echo ENV_QT_PATH=%ENV_QT_PATH%
-        dir "%ENV_QT_PATH%\lib\cmake\Qt5" 2>nul || echo Qt5 cmake dir not found
-
-    - name: Build with CMake (direct)
-      shell: cmd
-      env:
-        ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-        ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
-      run: |
-        call python ci\generate-version.py
-        call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
-        if not exist build mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} ^
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-          -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%" ^
-          -DQT_DIR="%QT_DIR%" ^
-          -DQt5_DIR="%Qt5_DIR%"
-        cmake --build . --config RelWithDebInfo
-        cd ..
+      - name: Build with CMake
+        shell: cmd
+        env:
+          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+        run: |
+          call python ci\generate-version.py
+          call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
+          if not exist build mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} ^
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%" ^
+            -DQT_DIR="%QT_DIR%" ^
+            -DQt5_DIR="%Qt5_DIR%"
+          cmake --build . --config RelWithDebInfo
+          cd ..
 
       - name: List build output
         shell: bash
@@ -185,35 +171,70 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # ==================== 打包步骤（PowerShell） ====================
       - name: Package
         id: package
         shell: powershell
         env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_VCINSTALL: ${{ env.vcinstall-path }}
           ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+          # 包名格式：包名-平台-架构-版本
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           $outDir = "$pwd\build\$env:publish_name"
           Write-Host "Packaging to $outDir"
-          & cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} $outDir
-          if (Test-Path $outDir) {
-              Write-Host "Contents of $outDir :"
-              Get-ChildItem $outDir -Recurse
+
+          # 1. 创建目标目录
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          # 2. 复制配置文件、keymap等
+          if (Test-Path "keymap") {
+              Copy-Item -Path "keymap" -Destination "$outDir\" -Recurse -Force
+          }
+          if (Test-Path "config\config.ini") {
+              Copy-Item -Path "config\config.ini" -Destination "$outDir\" -Force
+          }
+
+          # 3. 复制主程序
+          if (Test-Path "build\RelWithDebInfo\$env:target-name.exe") {
+              Copy-Item -Path "build\RelWithDebInfo\$env:target-name.exe" -Destination "$outDir\" -Force
           } else {
-              Write-Error "打包目录 $outDir 不存在！"
+              Write-Error "主程序 $env:target-name.exe 未找到！"
               exit 1
           }
-          # 设置 GitHub Actions 输出变量
+
+          # 4. 运行 windeployqt 部署 Qt 依赖
+          $qtBin = "$env:ENV_QT_PATH\bin\windeployqt.exe"
+          if (Test-Path $qtBin) {
+              & $qtBin "--${{ matrix.msvc-arch }}" "$outDir\$env:target-name.exe"
+          } else {
+              Write-Warning "windeployqt.exe 未找到，跳过 Qt 依赖部署"
+          }
+
+          # 5. 复制 adb 依赖（根据实际项目结构调整）
+          $adbSource = "ci\win\adb\${{ matrix.msvc-arch }}"
+          if (Test-Path $adbSource) {
+              Copy-Item -Path "$adbSource\*" -Destination "$outDir\" -Recurse -Force
+          } else {
+              Write-Host "adb 目录 $adbSource 不存在，跳过"
+          }
+
+          # 6. 列出打包目录内容（调试）
+          Write-Host "Contents of $outDir :"
+          Get-ChildItem $outDir -Recurse
+
+          # 7. 设置 GitHub Actions 输出变量
           "package-name=$env:publish_name" >> $env:GITHUB_OUTPUT
-          # 压缩
+
+          # 8. 压缩
           Compress-Archive -Path $outDir -DestinationPath "$pwd\build\$env:publish_name.zip" -Force
 
+      # 上传 artifact
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.package-name }}.zip
           path: build\${{ steps.package.outputs.package-name }}.zip
 
+      # 如果是 tag 触发，发布到 Release
       - name: Upload Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
