@@ -46,8 +46,8 @@ jobs:
     name: Build ${{ matrix.msvc-arch }}
     runs-on: windows-latest
     strategy:
-      matrix:
-        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+       matrix:
+       include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       target-name: QtScrcpy
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
@@ -139,19 +139,32 @@ jobs:
             find "${{ env.qt-install-path }}" -name "Qt5Config.cmake" 2>/dev/null || true
           fi
 
-      - name: Build with CMake (direct)
-        shell: cmd
-        env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
-        run: |
-          call python ci\generate-version.py
-          call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%"
-          cmake --build . --config RelWithDebInfo
-          cd ..
+    - name: Debug environment variables
+      shell: cmd
+      run: |
+        echo Qt5_DIR=%Qt5_DIR%
+        echo QT_DIR=%QT_DIR%
+        echo CMAKE_PREFIX_PATH=%CMAKE_PREFIX_PATH%
+        echo ENV_QT_PATH=%ENV_QT_PATH%
+        dir "%ENV_QT_PATH%\lib\cmake\Qt5" 2>nul || echo Qt5 cmake dir not found
+
+    - name: Build with CMake (direct)
+      shell: cmd
+      env:
+        ENV_VCVARSALL: ${{ env.vcvarsall-path }}
+        ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+      run: |
+        call python ci\generate-version.py
+        call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
+        if not exist build mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} ^
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+          -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%" ^
+          -DQT_DIR="%QT_DIR%" ^
+          -DQt5_DIR="%Qt5_DIR%"
+        cmake --build . --config RelWithDebInfo
+        cd ..
 
       - name: List build output
         shell: bash
