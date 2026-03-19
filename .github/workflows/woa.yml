@@ -114,8 +114,11 @@ jobs:
         shell: powershell
         run: |
           $qtRoot = "${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}"
-          $qtRoot = $qtRoot -replace '/','\'
+          $qtRoot = $qtRoot -replace '/','\'   # 统一为反斜杠
+          $qtRoot = $qtRoot.Trim()              # 去除可能的空白/换行
           Write-Host "Qt root: $qtRoot"
+
+          # 查找 Qt5Config.cmake
           $qt5Config = Get-ChildItem -Path $qtRoot -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($qt5Config) {
               $qt5Dir = $qt5Config.Directory.FullName
@@ -124,11 +127,13 @@ jobs:
               $qt5Dir = "$qtRoot\lib\cmake\Qt5"
               Write-Host "Using default Qt5 dir: $qt5Dir"
           }
-          echo "Qt5_DIR=$qt5Dir" >> $env:GITHUB_ENV
-          echo "QT_DIR=$qt5Dir" >> $env:GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$qtRoot" >> $env:GITHUB_ENV
-          echo "ENV_QT_PATH=$qtRoot" >> $env:GITHUB_ENV
-          echo "$qtRoot\bin" >> $env:GITHUB_PATH
+
+          # 设置环境变量（确保没有换行问题）
+          "Qt5_DIR=$qt5Dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "QT_DIR=$qt5Dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENV_QT_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$qtRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Qt environment
         shell: powershell
@@ -137,11 +142,13 @@ jobs:
           Write-Host "QT_DIR=$env:QT_DIR"
           Write-Host "CMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH"
           Write-Host "ENV_QT_PATH=$env:ENV_QT_PATH"
+          $qtRoot = $env:ENV_QT_PATH
+          Write-Host "Using qtRoot: $qtRoot"
           if (Test-Path "$env:Qt5_DIR\Qt5Config.cmake") {
               Write-Host "✅ Qt5Config.cmake found"
           } else {
-              Write-Host "❌ Qt5Config.cmake not found"
-              Get-ChildItem -Path "$env:ENV_QT_PATH" -Recurse -Filter "Qt5Config.cmake"
+              Write-Host "❌ Qt5Config.cmake not found, searching in ENV_QT_PATH..."
+              Get-ChildItem -Path $qtRoot -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue
           }
 
       - name: Build with CMake
@@ -149,7 +156,7 @@ jobs:
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
         run: |
-          rem call python ci\generate-version.py   # 注释掉，如需要请恢复
+          rem call python ci\generate-version.py   # 如不需要请保留注释
           call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
           if not exist build mkdir build
           cd build
