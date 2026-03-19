@@ -1,16 +1,17 @@
-name: Build Qt 5.15.2 for ARM (Native Runners)
+name: Install Qt 5.15.2 for ARM64 (aqtinstall)
 
 on:
   workflow_dispatch:
     inputs:
+      # 虽然目前只支持 arm64，但保留输入字段便于将来扩展
       architectures:
-        description: 'Comma-separated list of ARM architectures to build (arm64 only, arm32 support deprecated)'
+        description: 'Architecture to get (only arm64 is supported by aqt for Linux ARM)'
         required: true
         default: 'arm64'
         type: string
   push:
     tags:
-      - 'qt-*'
+      - 'qt-*'        # 推送 qt-5.15.2-arm64 等标签时自动构建
 
 jobs:
   prepare:
@@ -18,18 +19,19 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Generate matrix
+      - name: Validate and generate matrix
         id: set-matrix
         run: |
-          # GitHub 官方仅提供 ARM64 原生运行器
+          # aqt 官方提供的 Linux ARM 桌面架构只有 linux_arm64
+          # 如需 armv7，需自行源码编译（可参考其他工作流）
           arch_map='{
-            "arm64": {"runner":"ubuntu-24.04-arm", "gcc-arch":"arm64", "qt-configure-args":"-xcb -system-xcb"}
+            "arm64": {"runner":"ubuntu-24.04-arm", "gcc-arch":"arm64", "qt-arch":"linux_arm64", "qt-path":"gcc_64", "container":""}
           }'
           
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           else
-            # tag 触发时默认只构建 arm64
+            # tag 触发时默认构建 arm64
             archs=("arm64")
           fi
           
@@ -37,7 +39,7 @@ jobs:
           for arch in "${archs[@]}"; do
             arch=$(echo "$arch" | xargs)
             if [[ "$arch" != "arm64" ]]; then
-              echo "⚠️ 警告: 架构 '$arch' 无法使用原生运行器，已忽略。如需构建 arm32，请回退至 QEMU 方案。"
+              echo "⚠️ 警告: 架构 '$arch' 无法通过 aqt 获取预编译包，已忽略。仅 arm64 被支持。"
               continue
             fi
             entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
@@ -47,103 +49,93 @@ jobs:
           done
           
           if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的 ARM 架构可构建"
+            echo "❌ 错误: 没有有效的 ARM 架构可处理"
             exit 1
           fi
           matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
-  build-qt:
+  install-qt:
     needs: prepare
-    name: Build Qt 5.15.2 for ${{ matrix.gcc-arch }}
+    name: Install Qt 5.15.2 for ${{ matrix.gcc-arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       QT_VERSION: '5.15.2'
+      QT_INSTALL_DIR: /opt/Qt/${{ env.QT_VERSION }}/${{ matrix.gcc-arch }}
     steps:
-      - name: Checkout code
+      - name: Checkout repository (only needed for versioning, optional)
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            perl \
-            python3 \
-            git \
+            python3-pip \
+            python3-venv \
             wget \
-            libxcb-util-dev \
-            libxcb-icccm4-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-randr0-dev \
-            libxcb-render-util0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-sync-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xinerama0-dev \
-            libxcb-xkb-dev \
-            libxcb-xinput-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxext-dev \
-            libxrender-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxss-dev \
-            libdbus-1-dev \
-            libfontconfig1-dev \
-            libfreetype6-dev \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libssl-dev \
+            xz-utils \
+            # 以下为 Qt 运行时通常需要的依赖（可根据项目需求增减）
+            libxcb-util1 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-shm0 \
+            libxcb-sync1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxkbcommon-x11-0 \
+            libfontconfig1 \
+            libfreetype6 \
+            libx11-xcb1 \
+            libxcb-glx0 \
+            libxcb-present0 \
+            libxcb-dri3-0 \
+            libxcb-dri2-0 \
+            libgl1-mesa-glx \
+            libglu1-mesa \
             && sudo apt-get clean
 
-      - name: Download Qt source
+      - name: Install aqtinstall
         run: |
-          QT_MAJOR_MINOR=$(echo ${{ env.QT_VERSION }} | cut -d. -f1-2)
-          OFFICIAL_URL="https://download.qt.io/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
-          MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/qt/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
-          
-          echo "Downloading Qt source from official source..."
-          if wget --timeout=30 --tries=3 --retry-connrefused -O qt-src.tar.xz "$OFFICIAL_URL"; then
-            echo "Downloaded from official source successfully."
-          else
-            echo "Official source failed, trying mirror: $MIRROR_URL"
-            wget --timeout=30 --tries=3 --retry-connrefused -O qt-src.tar.xz "$MIRROR_URL"
-          fi
-          
-          tar -xf qt-src.tar.xz
+          # 使用虚拟环境避免权限警告
+          python3 -m venv ${{ github.workspace }}/venv
+          source ${{ github.workspace }}/venv/bin/activate
+          pip install --upgrade pip
+          pip install aqtinstall
 
-      - name: Configure and build Qt
+      - name: Install Qt ${{ env.QT_VERSION }} for ${{ matrix.qt-arch }}
         run: |
-          cd qt-everywhere-src-${{ env.QT_VERSION }}
-          mkdir build && cd build
-          
-          ../configure -prefix /opt/Qt/${{ env.QT_VERSION }}/${{ matrix.gcc-arch }} \
-            -opensource -confirm-license \
-            -nomake examples -nomake tests \
-            -skip qtwayland -skip qtwebengine -skip qtwebview \
-            -no-openssl -no-eglfs -no-linuxfb \
-            ${{ matrix.qt-configure-args }} \
-            -qt-libpng -qt-libjpeg -qt-zlib -qt-pcre \
-            -dbus-linked -no-icu -no-glib -no-cups \
-            -no-iconv -no-tslib -no-pch \
-            -optimize-size -release
-          
-          make -j$(nproc)
-          sudo make install
+          source ${{ github.workspace }}/venv/bin/activate
+          # 创建安装目录
+          sudo mkdir -p ${{ env.QT_INSTALL_DIR }}
+          # 使用 aqt 下载并安装 Qt（输出目录设置为父目录，aqt会自动创建子目录）
+          aqt install-qt linux desktop ${{ env.QT_VERSION }} ${{ matrix.qt-arch }} \
+            --outputdir /opt/Qt
+          # 由于 aqt 默认会安装到 /opt/Qt/5.15.2/gcc_64（因为内部命名问题），需要做调整
+          # 实际上对于 linux_arm64，aqt 会安装到 /opt/Qt/5.15.2/gcc_64 而不是 arm64 目录，
+          # 因此我们将它移动到期望的目录结构
+          if [ -d "/opt/Qt/${{ env.QT_VERSION }}/gcc_64" ]; then
+            sudo mv /opt/Qt/${{ env.QT_VERSION }}/gcc_64 ${{ env.QT_INSTALL_DIR }}
+          fi
+
+      - name: Verify Qt installation
+        run: |
+          ls -la ${{ env.QT_INSTALL_DIR }}/bin
+          ${{ env.QT_INSTALL_DIR }}/bin/qmake --version
 
       - name: Package Qt installation
         run: |
           cd /opt
-          tar -czf ${{ github.workspace }}/qt-${{ env.QT_VERSION }}-${{ matrix.gcc-arch }}.tar.gz Qt
+          sudo tar -czf ${{ github.workspace }}/qt-${{ env.QT_VERSION }}-${{ matrix.gcc-arch }}.tar.gz Qt
 
-      - name: Upload Qt build artifact
+      - name: Upload Qt package as artifact
         uses: actions/upload-artifact@v4
         with:
           name: qt-${{ env.QT_VERSION }}-${{ matrix.gcc-arch }}
@@ -151,7 +143,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build-qt
+    needs: install-qt
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
