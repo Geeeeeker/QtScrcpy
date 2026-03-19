@@ -73,18 +73,43 @@ jobs:
           path: ${{ env.qt-install-path }}
           key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.qt-ver }}
-          host: windows
-          target: desktop
-          arch: ${{ matrix.qt-arch }}
-          dir: ${{ env.qt-install-path }}
-          cached: ${{ steps.cache-qt.outputs.cache-hit }}
-          setup-python: false
-          # 最小模块集，先安装核心库
-          modules: qtbase
+      - name: Install aqt (if cache miss)
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: pip install aqtinstall
+
+      - name: Check available architectures for Qt ${{ env.qt-ver }}
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        id: check-arch
+        shell: bash
+        run: |
+          # 使用清华镜像源列出可用架构
+          AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }} --base https://mirrors.tuna.tsinghua.edu.cn/qt)
+          echo "Available architectures: $AVAIL_ARCH"
+          if echo "$AVAIL_ARCH" | grep -q "${{ matrix.qt-arch }}"; then
+            echo "✅ Architecture ${{ matrix.qt-arch }} is available."
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Architecture ${{ matrix.qt-arch }} is NOT available. Skipping this job."
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Qt (manual)
+        if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
+        shell: bash
+        run: |
+          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
+            --outputdir ${{ env.qt-install-path }} \
+            --base https://mirrors.tuna.tsinghua.edu.cn/qt \
+            --modules qtbase   # 可根据需要添加其他模块，如 qtsvg qttools 等
+          # 设置环境变量供后续构建使用
+          echo "Qt5_DIR=${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}" >> $GITHUB_ENV
+          echo "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}/bin" >> $GITHUB_PATH
+
+      - name: Skip if architecture unavailable
+        if: steps.check-arch.outputs.available == 'false'
+        run: |
+          echo "Architecture ${{ matrix.qt-arch }} not available, skipping build."
+          exit 0
 
       - uses: actions/checkout@v4
         with:
