@@ -1,16 +1,16 @@
-name: Build Qt 5.15.2 for ARM
+name: Build Qt 5.15.2 for ARM (Native Runners)
 
 on:
   workflow_dispatch:
     inputs:
       architectures:
-        description: 'Comma-separated list of ARM architectures to build (arm, arm64)'
+        description: 'Comma-separated list of ARM architectures to build (arm64 only, arm32 support deprecated)'
         required: true
         default: 'arm64'
         type: string
   push:
     tags:
-      - 'qt-*'   # 例如推送 qt-5.15.2-arm 时触发
+      - 'qt-*'
 
 jobs:
   prepare:
@@ -21,25 +21,32 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
+          # GitHub 官方仅提供 ARM64 原生运行器，且 Node 24 将不再支持 ARM32 [citation:7]
+          # 因此矩阵目前只支持 arm64，如需 arm32 仍需使用 QEMU 方案
           arch_map='{
-            "arm64": {"platform":"linux/arm64", "gcc-arch":"arm64", "container-image":"arm64v8/ubuntu:22.04"},
-            "arm":   {"platform":"linux/arm/v7", "gcc-arch":"arm",   "container-image":"arm32v7/ubuntu:22.04"}
+            "arm64": {"runner":"ubuntu-24.04-arm", "gcc-arch":"arm64", "qt-configure-args":"-xcb -system-xcb"}
           }'
-          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
-          # 如果没有输入（tag触发），则默认构建 arm64 和 arm
-          if [ ${#archs[@]} -eq 0 ]; then
-            archs=("arm64" "arm")
+          
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
+          else
+            # tag 触发时默认只构建 arm64
+            archs=("arm64")
           fi
+          
           entries=()
           for arch in "${archs[@]}"; do
             arch=$(echo "$arch" | xargs)
+            if [[ "$arch" != "arm64" ]]; then
+              echo "⚠️ 警告: 架构 '$arch' 无法使用原生运行器，已忽略。如需构建 arm32，请回退至 QEMU 方案。"
+              continue
+            fi
             entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
             if [[ -n "$entry" ]]; then
               entries+=("$entry")
-            else
-              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
             fi
           done
+          
           if [ ${#entries[@]} -eq 0 ]; then
             echo "❌ 错误: 没有有效的 ARM 架构可构建"
             exit 1
@@ -50,95 +57,87 @@ jobs:
   build-qt:
     needs: prepare
     name: Build Qt 5.15.2 for ${{ matrix.gcc-arch }}
-    runs-on: ubuntu-22.04
+    # 关键修改：直接使用原生 ARM 运行器 [citation:6]
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       QT_VERSION: '5.15.2'
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: ${{ matrix.platform }}
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Build Qt in Docker container
+      - name: Install build dependencies
         run: |
-          docker run --rm \
-            --platform ${{ matrix.platform }} \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            -e DEBIAN_FRONTEND=noninteractive \
-            ${{ matrix.container-image }} \
-            bash -c "
-              set -e
-              echo '=== Installing build dependencies ==='
-              apt-get update
-              apt-get install -y \
-                build-essential \
-                perl \
-                python3 \
-                git \
-                wget \
-                libxcb-util-dev \
-                libxcb-icccm4-dev \
-                libxcb-image0-dev \
-                libxcb-keysyms1-dev \
-                libxcb-randr0-dev \
-                libxcb-render-util0-dev \
-                libxcb-shape0-dev \
-                libxcb-shm0-dev \
-                libxcb-sync-dev \
-                libxcb-xfixes0-dev \
-                libxcb-xinerama0-dev \
-                libxcb-xkb-dev \
-                libxcb-xinput-dev \
-                libx11-dev \
-                libx11-xcb-dev \
-                libxext-dev \
-                libxrender-dev \
-                libxrandr-dev \
-                libxi-dev \
-                libxss-dev \
-                libdbus-1-dev \
-                libfontconfig1-dev \
-                libfreetype6-dev \
-                libgl1-mesa-dev \
-                libglu1-mesa-dev \
-                libssl-dev \
-                && apt-get clean
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            perl \
+            python3 \
+            git \
+            wget \
+            libxcb-util-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render-util0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-sync-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xinerama0-dev \
+            libxcb-xkb-dev \
+            libxcb-xinput-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxss-dev \
+            libdbus-1-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libssl-dev \
+            && sudo apt-get clean
 
-              # 下载 Qt 源码
-              QT_MAJOR_MINOR=\$(echo ${{ env.QT_VERSION }} | cut -d. -f1-2)
-              QT_SRC_URL=\"https://download.qt.io/archive/qt/\${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz\"
-              echo \"Downloading Qt source from \$QT_SRC_URL\"
-              wget -q \${QT_SRC_URL} -O qt-src.tar.xz
-              tar -xf qt-src.tar.xz
-              cd qt-everywhere-src-${{ env.QT_VERSION }}
+      - name: Download Qt source
+        run: |
+          QT_MAJOR_MINOR=$(echo ${{ env.QT_VERSION }} | cut -d. -f1-2)
+          QT_SRC_URL="https://download.qt.io/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
+          echo "Downloading Qt source from $QT_SRC_URL"
+          wget -q ${QT_SRC_URL} -O qt-src.tar.xz
+          tar -xf qt-src.tar.xz
 
-              # 创建构建目录
-              mkdir build && cd build
+      - name: Configure and build Qt
+        run: |
+          cd qt-everywhere-src-${{ env.QT_VERSION }}
+          mkdir build && cd build
+          
+          # 配置 Qt，可根据需要调整参数
+          ../configure -prefix /opt/Qt/${{ env.QT_VERSION }}/${{ matrix.gcc-arch }} \
+            -opensource -confirm-license \
+            -nomake examples -nomake tests \
+            -skip qtwayland -skip qtwebengine -skip qtwebview \
+            -no-openssl -no-eglfs -no-linuxfb \
+            ${{ matrix.qt-configure-args }} \
+            -qt-libpng -qt-libjpeg -qt-zlib -qt-pcre \
+            -dbus-linked -no-icu -no-glib -no-cups \
+            -no-iconv -no-tslib -no-pch \
+            -optimize-size -release
+          
+          # 利用所有 CPU 核心编译
+          make -j$(nproc)
+          sudo make install
 
-              # 配置 Qt（根据架构调整部分选项，armel/armhf 可能需 -platform 但 QEMU 模拟下通常自动识别）
-              ../configure -prefix /opt/Qt/${{ env.QT_VERSION }}/${{ matrix.gcc-arch }} \
-                -opensource -confirm-license \
-                -nomake examples -nomake tests \
-                -skip qtwayland -skip qtwebengine -skip qtwebview \
-                -no-openssl -no-eglfs -no-linuxfb \
-                -xcb -system-xcb -xcb-xlib \
-                -qt-libpng -qt-libjpeg -qt-zlib -qt-pcre \
-                -dbus-linked -no-icu -no-glib -no-cups \
-                -no-iconv -no-tslib -no-pch \
-                -optimize-size -release
-
-              # 编译
-              make -j\$(nproc)
-              make install
-
-              # 打包安装目录
-              cd /opt
-              tar -czf /workspace/qt-${{ env.QT_VERSION }}-${{ matrix.gcc-arch }}.tar.gz Qt
-            "
+      - name: Package Qt installation
+        run: |
+          cd /opt
+          tar -czf ${{ github.workspace }}/qt-${{ env.QT_VERSION }}-${{ matrix.gcc-arch }}.tar.gz Qt
 
       - name: Upload Qt build artifact
         uses: actions/upload-artifact@v4
