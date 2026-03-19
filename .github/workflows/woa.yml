@@ -6,7 +6,7 @@ on:
       architectures:
         description: 'Comma-separated list of architectures to build (arm64, i386, amd64)'
         required: true
-        default: 'arm64'        # 默认只构建 arm64
+        default: 'arm64'        # 默认构建 arm64
         type: string
 
 jobs:
@@ -57,7 +57,7 @@ jobs:
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
       qt-ver: '5.15.2'
-      qt-install-path: ${{ github.workspace }}/Qt/${{ matrix.qt-ver }}
+      qt-install-path: ${{ github.workspace }}/Qt          # 安装根目录
       plantform-des: win
     steps:
       - name: Setup Python
@@ -83,8 +83,10 @@ jobs:
           dir: ${{ env.qt-install-path }}
           cached: ${{ steps.cache-qt.outputs.cache-hit }}
           setup-python: false
-          # 如果 arm64 安装失败，可尝试取消下一行的注释，手动指定模块
-          # modules: qtbase qtdeclarative qtquickcontrols2 qtsvg qttools
+          # 明确指定所需模块，避免自动安装所有桌面模块（--autodesktop）
+          modules: qtbase qtsvg qtdeclarative qtquickcontrols2 qttools qtimageformats
+          # 使用官方源或国内镜像（可选）
+          aqtsource: 'https://download.qt.io'   # 可替换为 https://mirrors.tuna.tsinghua.edu.cn/qt
 
       - uses: actions/checkout@v4
         with:
@@ -96,7 +98,8 @@ jobs:
         shell: cmd
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ matrix.qt-arch-install }}
+          # Qt 实际安装路径：根目录/版本号/架构子目录
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
         run: |
           call python ci\generate-version.py
           call "ci\win\build_for_win.bat" RelWithDebInfo ${{ matrix.msvc-arch }}
@@ -111,7 +114,7 @@ jobs:
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
           ENV_VCINSTALL: ${{ env.vcinstall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ matrix.qt-arch-install }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} ..\build\${{ env.publish_name }}
