@@ -93,12 +93,12 @@ jobs:
             libglu1-mesa \
             && sudo apt-get clean
 
-      - name: Install aqtinstall
+      - name: Install aqtinstall (latest)
         run: |
           python3 -m venv ${{ github.workspace }}/venv
           source ${{ github.workspace }}/venv/bin/activate
           pip install --upgrade pip
-          pip install aqtinstall
+          pip install --upgrade aqtinstall
 
       - name: Set Qt installation directory
         run: |
@@ -108,8 +108,12 @@ jobs:
         run: |
           source ${{ github.workspace }}/venv/bin/activate
           sudo mkdir -p ${{ env.QT_INSTALL_DIR }}
+          # 使用归档镜像并仅安装基础模块 qtbase
+          export AQT_MIRROR='https://download.qt.io/archive/'
           aqt install-qt linux desktop ${{ env.QT_VERSION }} ${{ matrix.qt-arch }} \
-            --outputdir /opt/Qt
+            --outputdir /opt/Qt \
+            -m qtbase
+          # aqt 默认将安装目录命名为 gcc_64，移动到期望的路径
           if [ -d "/opt/Qt/${{ env.QT_VERSION }}/gcc_64" ]; then
             sudo mv /opt/Qt/${{ env.QT_VERSION }}/gcc_64 ${{ env.QT_INSTALL_DIR }}
           fi
