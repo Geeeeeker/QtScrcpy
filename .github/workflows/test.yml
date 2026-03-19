@@ -1,12 +1,12 @@
-name: Ubuntu x86 (Manual Dispatch)
+name: Ubuntu ARM (Manual Dispatch)
 
 on:
   workflow_dispatch:
     inputs:
       architectures:
-        description: 'Comma-separated list of x86 architectures to build (i386, amd64)'
+        description: 'Comma-separated list of ARM architectures to build (arm, arm64)'
         required: true
-        default: 'amd64'
+        default: 'arm64'
         type: string
 
 jobs:
@@ -19,8 +19,8 @@ jobs:
         id: set-matrix
         run: |
           arch_map='{
-            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:22.04"},
-            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"}
+            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64", "gcc-arch":"arm64", "container-image":"arm64v8/ubuntu:22.04"},
+            "arm":   {"platform":"linux/arm/v7", "qt-arch":"linux_armv7", "gcc-arch":"arm",   "container-image":"arm32v7/ubuntu:22.04"}
           }'
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           entries=()
@@ -34,7 +34,7 @@ jobs:
             fi
           done
           if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的 x86 架构可构建"
+            echo "❌ 错误: 没有有效的 ARM 架构可构建"
             exit 1
           fi
           matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
@@ -52,7 +52,7 @@ jobs:
       qt-ver: '5.15.2'
       plantform-des: ubuntu
     steps:
-      - name: Set up QEMU (for i386)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: ${{ matrix.platform }}
@@ -62,3 +62,182 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
+          ssh-key: ${{ secrets.BOT_SSH_KEY }}
+
+      - name: Get the version (for tag)
+        id: get-version
+        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build in Docker container
+        env:
+          VERSION: ${{ steps.get-version.outputs.version }}
+        run: |
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v ${{ github.workspace }}:${{ github.workspace }} \
+            -w ${{ github.workspace }} \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e GITHUB_WORKSPACE=${{ github.workspace }} \
+            -e GITHUB_REF=${{ github.ref }} \
+            -e VERSION="${{ env.VERSION }}" \
+            ${{ matrix.container-image }} \
+            bash -c "
+              set -e
+              echo '=== Installing basic dependencies ==='
+              apt-get update
+              apt-get install -y git ca-certificates sudo
+
+              echo '=== Installing system dependencies ==='
+              apt-get update
+              apt-get install -y \
+                build-essential \
+                cmake \
+                libglew-dev \
+                libglfw3-dev \
+                imagemagick \
+                wget \
+                patchelf \
+                zip \
+                libxcb1-dev \
+                libxkbcommon-dev \
+                libxkbcommon-x11-dev \
+                libx11-dev \
+                libx11-xcb-dev \
+                libfontconfig1-dev \
+                libfreetype6-dev \
+                libxrender-dev \
+                libxext-dev \
+                gnupg \
+                lsb-release \
+                fuse \
+                libasound2-dev
+
+              echo '=== Installing Python and aqt ==='
+              apt-get install -y python3 python3-pip
+              pip3 install --upgrade pip
+              pip3 install 'aqtinstall>=3.3'
+
+              # 可选镜像源：export AQT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/qt'
+
+              echo '=== Checking available architectures for Qt ${{ env.qt-ver }} ==='
+              AVAIL_ARCH=\$(aqt list-qt linux desktop --arch ${{ env.qt-ver }})
+              echo \"Available architectures: \$AVAIL_ARCH\"
+
+              # 定义 Qt 安装根目录
+              export QT_BASE_DIR=${{ github.workspace }}/Qt/${{ env.qt-ver }}
+              mkdir -p \"\$QT_BASE_DIR\"
+
+              if echo \"\$AVAIL_ARCH\" | grep -q \"${{ matrix.qt-arch }}\"; then
+                  echo \"✅ Architecture ${{ matrix.qt-arch }} is available, installing pre-built Qt.\"
+                  aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
+                    --outputdir ${{ github.workspace }}/Qt
+                  export QT_ROOT=\"\$QT_BASE_DIR/${{ matrix.qt-arch }}\"
+              else
+                  echo \"⚠️ Architecture ${{ matrix.qt-arch }} not available via aqt, building Qt from source.\"
+                  # 安装编译 Qt 所需的额外依赖
+                  apt-get install -y \
+                    libxcb-icccm4-dev \
+                    libxcb-image0-dev \
+                    libxcb-keysyms1-dev \
+                    libxcb-randr0-dev \
+                    libxcb-shape0-dev \
+                    libxcb-sync-dev \
+                    libxcb-xfixes0-dev \
+                    libxcb-xinerama0-dev \
+                    libxcb-xkb-dev \
+                    libxcb-xv-dev \
+                    libxcb-shm0-dev \
+                    libxcb-util-dev \
+                    libxcb-xinput-dev \
+                    libxcb-cursor-dev \
+                    libxcb-composite0-dev \
+                    libxcb-ewmh-dev \
+                    libxcb-res0-dev \
+                    libxcb-damage0-dev \
+                    libxcb-dri2-0-dev \
+                    libxcb-dri3-dev \
+                    libxcb-present-dev \
+                    libxcb-glx0-dev \
+                    libxcb-xf86dri0-dev \
+                    libxcb-record0-dev \
+                    libxcb-xevie0-dev \
+                    libxcb-xprint0-dev \
+                    libxcb-xsel0-dev \
+                    libxcb-xtest0-dev \
+                    libgl1-mesa-dev \
+                    libglu1-mesa-dev \
+                    libxrandr-dev \
+                    libxi-dev \
+                    libxss-dev \
+                    libdbus-1-dev \
+                    ninja-build \
+                    perl
+
+                  # 下载 Qt 5.15.2 源码
+                  QT_MAJOR_MINOR=\$(echo ${{ env.qt-ver }} | cut -d. -f1-2)
+                  QT_SRC_URL=\"https://download.qt.io/archive/qt/\${QT_MAJOR_MINOR}/${{ env.qt-ver }}/single/qt-everywhere-opensource-src-${{ env.qt-ver }}.tar.xz\"
+                  wget -q \${QT_SRC_URL} -O qt-src.tar.xz
+                  tar -xf qt-src.tar.xz
+                  cd qt-everywhere-src-${{ env.qt-ver }}
+
+                  # 配置并编译 Qt（仅构建必要模块，减少时间）
+                  mkdir build && cd build
+                  ../configure -prefix \"\$QT_BASE_DIR\" \
+                    -opensource -confirm-license \
+                    -nomake examples -nomake tests \
+                    -skip qtwayland -skip qtwebengine -skip qtwebview \
+                    -no-openssl -no-opengl -no-eglfs -no-linuxfb \
+                    -xcb -system-xcb -xcb-xlib \
+                    -qt-libpng -qt-libjpeg -qt-zlib -qt-pcre \
+                    -dbus-linked -no-icu -no-glib -no-cups \
+                    -no-iconv -no-tslib -no-pch \
+                    -optimize-size -release
+                  make -j\$(nproc)
+                  make install
+
+                  export QT_ROOT=\"\$QT_BASE_DIR\"
+                  cd ${{ github.workspace }}
+              fi
+
+              # 设置 Qt 相关环境变量
+              export CMAKE_PREFIX_PATH=\"\$QT_ROOT\"
+              export PATH=\"\$QT_ROOT/bin:\$PATH\"
+
+              echo '=== Generating version ==='
+              python3 ci/generate-version.py
+
+              echo '=== Building ==='
+              ci/linux/build_for_linux.sh 'Release'
+
+              echo '=== Packaging binary tarball ==='
+              mkdir -p ${{ github.workspace }}/output/artifacts
+              BIN_TAR=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
+              tar -czf \"\$BIN_TAR\" -C output/Release .
+              cp \"\$BIN_TAR\" ${{ github.workspace }}/output/artifacts/
+            "
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-binary
+          path: output/artifacts/*.tar.gz
+          if-no-files-found: warn
+
+      - name: Check if artifacts exist
+        id: check-artifacts
+        run: |
+          if ls output/artifacts/* 1> /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload binary to Release
+        if: startsWith(github.ref, 'refs/tags/') && steps.check-artifacts.outputs.exists == 'true'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: output/artifacts/*.tar.gz
+          file_glob: true
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          overwrite: true
