@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       architectures:
-        description: 'Comma-separated list of architectures to build (arm, arm64, i386, amd64)'
+        description: 'Comma-separated list of architectures to build (arm64, i386, amd64)'
         required: true
-        default: 'arm,arm64'
+        default: 'arm64'        # 默认只构建 arm64
         type: string
 
 jobs:
@@ -18,12 +18,11 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射（紧凑 JSON）
+          # 架构映射（已移除 arm）
           arch_map='{
             "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"msvc2019"},
             "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"msvc2019_64"},
-            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"msvc2019_arm64"},
-            "arm":   {"qt-arch":"win32_msvc2019_arm","msvc-arch":"arm","qt-arch-install":"msvc2019_arm"}
+            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"msvc2019_arm64"}
           }'
 
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
@@ -83,7 +82,9 @@ jobs:
           arch: ${{ matrix.qt-arch }}
           dir: ${{ env.qt-install-path }}
           cached: ${{ steps.cache-qt.outputs.cache-hit }}
-          setup-python: false   # 我们已经手动设置了 Python，避免重复
+          setup-python: false
+          # 如果 arm64 安装失败，可尝试取消下一行的注释，手动指定模块
+          # modules: qtbase qtdeclarative qtquickcontrols2 qtsvg qttools
 
       - uses: actions/checkout@v4
         with:
