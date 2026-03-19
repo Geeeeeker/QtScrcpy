@@ -6,7 +6,7 @@ on:
       architectures:
         description: 'Comma-separated list of architectures to build (arm64, i386, amd64)'
         required: true
-        default: 'arm64'        # 默认构建 arm64
+        default: 'arm64'
         type: string
 
 jobs:
@@ -57,7 +57,7 @@ jobs:
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
       qt-ver: '5.15.2'
-      qt-install-path: ${{ github.workspace }}/Qt          # 安装根目录
+      qt-install-path: ${{ github.workspace }}/Qt
       plantform-des: win
     steps:
       - name: Setup Python
@@ -83,10 +83,8 @@ jobs:
           dir: ${{ env.qt-install-path }}
           cached: ${{ steps.cache-qt.outputs.cache-hit }}
           setup-python: false
-          # 明确指定所需模块，避免自动安装所有桌面模块（--autodesktop）
-          modules: qtbase qtsvg qtdeclarative qtquickcontrols2 qttools qtimageformats
-          # 使用官方源或国内镜像（可选）
-          aqtsource: 'https://download.qt.io'   # 可替换为 https://mirrors.tuna.tsinghua.edu.cn/qt
+          # 最小模块集，先安装核心库
+          modules: qtbase
 
       - uses: actions/checkout@v4
         with:
@@ -98,7 +96,6 @@ jobs:
         shell: cmd
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          # Qt 实际安装路径：根目录/版本号/架构子目录
           ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
         run: |
           call python ci\generate-version.py
