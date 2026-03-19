@@ -185,14 +185,16 @@ jobs:
           Write-Host "Packaging to $outDir"
           & cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} $outDir
           if (Test-Path $outDir) {
-            Write-Host "Contents of $outDir :"
-            Get-ChildItem $outDir -Recurse
+              Write-Host "Contents of $outDir :"
+              Get-ChildItem $outDir -Recurse
           } else {
-            Write-Error "打包目录 $outDir 不存在！"
-            exit 1
+              Write-Error "打包目录 $outDir 不存在！"
+              exit 1
           }
+          # 设置 GitHub Actions 输出变量
+          "package-name=$env:publish_name" >> $env:GITHUB_OUTPUT
+          # 压缩
           Compress-Archive -Path $outDir -DestinationPath "$pwd\build\$env:publish_name.zip" -Force
-          Write-Host "package-name=$env:publish_name" >> $env:GITHUB_OUTPUT
 
       - uses: actions/upload-artifact@v4
         with:
