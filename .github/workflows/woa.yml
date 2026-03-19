@@ -60,7 +60,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.qt-install-path }}
-          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}
+          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}-v2  # 更新key以强制重新安装（如需）
 
       - name: Install aqt (if cache miss)
         if: steps.cache-qt.outputs.cache-hit != 'true'
@@ -89,15 +89,25 @@ jobs:
         run: |
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase qtsvg qttools   # 增加模块以确保 CMake 配置完整
+            --modules qtbase qtsvg qttools qtdeclarative   # 增加模块以确保CMake配置完整
           QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
-          echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
-          echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV      # 备用
-          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
+          # 动态查找 Qt5Config.cmake 的正确位置
+          QT5_CMAKE_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
+          if [ -n "$QT5_CMAKE_DIR" ]; then
+            echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
+            echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+            echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+            echo "CMAKE_PREFIX_PATH=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+          else
+            echo "⚠️ Qt5Config.cmake not found, using default paths."
+            echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+            echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
+          fi
           echo "$QT_ROOT/bin" >> $GITHUB_PATH
-          # 调试：列出 Qt 安装目录
-          echo "Contents of Qt installation:"
-          ls -R "$QT_ROOT" || true
+          # 调试：列出Qt安装内容（前100行）
+          echo "Qt installation contents (first 100 lines):"
+          ls -R "$QT_ROOT" 2>/dev/null | head -100 || true
 
       - name: Skip if architecture unavailable
         if: steps.check-arch.outputs.available == 'false'
@@ -118,11 +128,10 @@ jobs:
           echo "QT_DIR=$QT_DIR"
           echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
           echo "PATH=$PATH"
-          # 检查 Qt5Config.cmake 是否存在
           if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
-            echo "✅ Qt5Config.cmake found"
+            echo "✅ Qt5Config.cmake exists at $Qt5_DIR/Qt5Config.cmake"
           else
-            echo "❌ Qt5Config.cmake not found"
+            echo "❌ Qt5Config.cmake not found at $Qt5_DIR/Qt5Config.cmake"
             # 尝试查找所有 config 文件
             find "${{ env.qt-install-path }}" -name "*Config.cmake" 2>/dev/null || true
           fi
