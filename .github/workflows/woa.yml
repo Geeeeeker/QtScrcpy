@@ -18,7 +18,7 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射（紧凑 JSON 对象）
+          # 架构映射（紧凑 JSON）
           arch_map='{
             "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"msvc2019"},
             "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"msvc2019_64"},
@@ -34,12 +34,12 @@ jobs:
             if [[ -n "$entry" ]]; then
               entries+=("$entry")
             else
-              echo "警告: 未知架构 '$arch'，已忽略"
+              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
             fi
           done
 
           if [ ${#entries[@]} -eq 0 ]; then
-            echo "错误: 没有有效的架构可构建"
+            echo "❌ 错误: 没有有效的架构可构建"
             exit 1
           fi
 
@@ -61,25 +61,31 @@ jobs:
       qt-install-path: ${{ github.workspace }}/Qt/${{ matrix.qt-ver }}
       plantform-des: win
     steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
         with:
-          path: ${{ env.qt-install-path }}/${{ matrix.qt-arch-install }}
-          key: ${{ runner.os }}/${{ env.qt-ver }}/${{ matrix.qt-arch }}
+          path: ${{ env.qt-install-path }}
+          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ matrix.qt-arch }}
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4   # 升级到 v4
+        uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.qt-ver }}
           host: windows
           target: desktop
           arch: ${{ matrix.qt-arch }}
-          dir: ${{ env.qt-install-path }}    # 指定安装目录，与缓存路径一致
+          dir: ${{ env.qt-install-path }}
           cached: ${{ steps.cache-qt.outputs.cache-hit }}
-          modules: qtbase                      # 明确指定 qtbase 模块，避免 aqt 解析失败
+          setup-python: false   # 我们已经手动设置了 Python，避免重复
 
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
@@ -89,7 +95,7 @@ jobs:
         shell: cmd
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ matrix.qt-arch-install }}
         run: |
           call python ci\generate-version.py
           call "ci\win\build_for_win.bat" RelWithDebInfo ${{ matrix.msvc-arch }}
@@ -104,7 +110,7 @@ jobs:
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
           ENV_VCINSTALL: ${{ env.vcinstall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ matrix.qt-arch-install }}
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} ..\build\${{ env.publish_name }}
@@ -118,7 +124,7 @@ jobs:
 
       - name: Upload Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: svenstaro/upload-release-action@v1-release
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ci\build\${{ steps.package.outputs.package-name }}.zip
