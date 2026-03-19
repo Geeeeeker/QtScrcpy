@@ -53,7 +53,7 @@ jobs:
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
       qt-ver: '5.15.2'
-      qt-install-path: ${{ github.workspace }}/Qt
+      qt-install-path: ${{ github.workspace }}\Qt   # 改用反斜杠
       plantform-des: win
     steps:
       - name: Setup Python
@@ -110,11 +110,13 @@ jobs:
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      # ================ 关键修复：始终设置 Qt 环境变量 ================
+      # ================ 关键修复：始终设置 Qt 环境变量（统一为反斜杠） ================
       - name: Set Qt environment variables (always)
         shell: powershell
         run: |
           $qtRoot = "${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}"
+          # 确保路径使用反斜杠
+          $qtRoot = $qtRoot -replace '/','\'
           Write-Host "Qt root: $qtRoot"
 
           # 查找 Qt5Config.cmake
@@ -128,7 +130,7 @@ jobs:
               Write-Host "Using default Qt5 dir: $qt5Dir"
           }
 
-          # 设置环境变量
+          # 设置环境变量（使用反斜杠）
           echo "Qt5_DIR=$qt5Dir" >> $env:GITHUB_ENV
           echo "QT_DIR=$qt5Dir" >> $env:GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=$qtRoot" >> $env:GITHUB_ENV
@@ -137,20 +139,26 @@ jobs:
           # 将 Qt bin 目录加入 PATH
           echo "$qtRoot\bin" >> $env:GITHUB_PATH
 
+      # 使用 PowerShell 验证，避免路径问题
       - name: Verify Qt environment (debug)
-        shell: cmd
+        shell: powershell
         run: |
-          echo Qt5_DIR=%Qt5_DIR%
-          echo QT_DIR=%QT_DIR%
-          echo CMAKE_PREFIX_PATH=%CMAKE_PREFIX_PATH%
-          echo ENV_QT_PATH=%ENV_QT_PATH%
-          dir "%ENV_QT_PATH%\lib\cmake\Qt5" 2>nul || echo Qt5 cmake dir not found
+          Write-Host "Qt5_DIR=$env:Qt5_DIR"
+          Write-Host "QT_DIR=$env:QT_DIR"
+          Write-Host "CMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH"
+          Write-Host "ENV_QT_PATH=$env:ENV_QT_PATH"
+          if (Test-Path "$env:Qt5_DIR\Qt5Config.cmake") {
+              Write-Host "✅ Qt5Config.cmake found"
+          } else {
+              Write-Host "❌ Qt5Config.cmake not found"
+              Get-ChildItem -Path "$env:ENV_QT_PATH" -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue
+          }
 
       - name: Build with CMake
         shell: cmd
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+          # 注意：这里使用 %ENV_QT_PATH% 已经通过 GITHUB_ENV 设置为反斜杠路径
         run: |
           call python ci\generate-version.py
           call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
@@ -188,7 +196,7 @@ jobs:
         id: package
         shell: powershell
         env:
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           $outDir = "$pwd\build\$env:publish_name"
