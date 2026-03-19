@@ -138,19 +138,26 @@ jobs:
       - name: Verify Qt environment and prepare build
         shell: powershell
         run: |
-          Write-Host "Qt5_DIR=$env:Qt5_DIR"
-          Write-Host "QT_DIR=$env:QT_DIR"
-          Write-Host "CMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH"
-          Write-Host "ENV_QT_PATH=$env:ENV_QT_PATH"
+          # 读取环境变量并去除两端空白
+          $qt5Dir = "$env:Qt5_DIR".Trim()
+          $qtDir = "$env:QT_DIR".Trim()
+          $cmakePrefix = "$env:CMAKE_PREFIX_PATH".Trim()
+          $envQtPath = "$env:ENV_QT_PATH".Trim()
+          Write-Host "Qt5_DIR='$qt5Dir'"
+          Write-Host "QT_DIR='$qtDir'"
+          Write-Host "CMAKE_PREFIX_PATH='$cmakePrefix'"
+          Write-Host "ENV_QT_PATH='$envQtPath'"
+
           # 检查文件是否存在
-          $testPath = "$env:Qt5_DIR\Qt5Config.cmake"
+          $testPath = Join-Path $qt5Dir "Qt5Config.cmake"
           if (Test-Path $testPath) {
               Write-Host "✅ Qt5Config.cmake found at $testPath"
           } else {
               Write-Host "❌ Qt5Config.cmake not found, searching in ENV_QT_PATH..."
-              Get-ChildItem -Path "$env:ENV_QT_PATH" -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue
+              Get-ChildItem -Path $envQtPath -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue
               exit 1
           }
+
           # 清理构建目录
           if (Test-Path "build") {
               Remove-Item -Path "build" -Recurse -Force
