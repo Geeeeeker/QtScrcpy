@@ -110,12 +110,13 @@ jobs:
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      - name: Set Qt environment variables (always)
+      # ========== 验证 Qt 并设置环境变量（直接基于文件系统查找） ==========
+      - name: Verify Qt and set environment variables
         shell: powershell
+        env:
+          QT_ROOT: ${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}
         run: |
-          $qtRoot = "${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}"
-          $qtRoot = $qtRoot -replace '/','\'   # 统一为反斜杠
-          $qtRoot = $qtRoot.Trim()
+          $qtRoot = "$env:QT_ROOT".Trim() -replace '/','\'
           Write-Host "Qt root: $qtRoot"
 
           # 查找 Qt5Config.cmake
@@ -124,41 +125,18 @@ jobs:
               $qt5Dir = $qt5Config.Directory.FullName
               Write-Host "Found Qt5Config.cmake in $qt5Dir"
           } else {
-              $qt5Dir = "$qtRoot\lib\cmake\Qt5"
-              Write-Host "Using default Qt5 dir: $qt5Dir"
+              Write-Host "❌ Qt5Config.cmake not found in $qtRoot"
+              exit 1
           }
 
-          # 设置环境变量（确保没有换行问题）
+          # 设置环境变量供后续步骤使用
           "Qt5_DIR=$qt5Dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "QT_DIR=$qt5Dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "ENV_QT_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$qtRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Verify Qt environment and prepare build
-        shell: powershell
-        run: |
-          # 读取环境变量并去除两端空白
-          $qt5Dir = "$env:Qt5_DIR".Trim()
-          $qtDir = "$env:QT_DIR".Trim()
-          $cmakePrefix = "$env:CMAKE_PREFIX_PATH".Trim()
-          $envQtPath = "$env:ENV_QT_PATH".Trim()
-          Write-Host "Qt5_DIR='$qt5Dir'"
-          Write-Host "QT_DIR='$qtDir'"
-          Write-Host "CMAKE_PREFIX_PATH='$cmakePrefix'"
-          Write-Host "ENV_QT_PATH='$envQtPath'"
-
-          # 检查文件是否存在
-          $testPath = Join-Path $qt5Dir "Qt5Config.cmake"
-          if (Test-Path $testPath) {
-              Write-Host "✅ Qt5Config.cmake found at $testPath"
-          } else {
-              Write-Host "❌ Qt5Config.cmake not found, searching in ENV_QT_PATH..."
-              Get-ChildItem -Path $envQtPath -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue
-              exit 1
-          }
-
-          # 清理构建目录
+          # 清理旧的构建目录
           if (Test-Path "build") {
               Remove-Item -Path "build" -Recurse -Force
               Write-Host "Removed old build directory"
@@ -170,7 +148,7 @@ jobs:
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
         run: |
-          rem call python ci\generate-version.py
+          rem call python ci\generate-version.py   # 如不需要请保持注释
           call "%ENV_VCVARSALL%" ${{ matrix.msvc-arch }}
           cd build
           cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.msvc-arch }} ^
