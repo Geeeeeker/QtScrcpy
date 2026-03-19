@@ -127,11 +127,25 @@ jobs:
                 apt-get install -y cmake
               }
 
-              echo '=== Installing Qt via aqt ==='
-              pip3 install aqtinstall
+              echo '=== Installing aqt ==='
+              pip3 install 'aqtinstall>=3.3'
+
+              # 设置镜像源（可选，使用清华源提高速度）
+              export AQT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/qt'
+
+              echo '=== Checking available architectures for Qt ${{ env.qt-ver }} ==='
+              AVAIL_ARCH=\$(aqt list-qt linux desktop --arch ${{ env.qt-ver }})
+              echo \"Available architectures: \$AVAIL_ARCH\"
+              if ! echo \"\$AVAIL_ARCH\" | grep -q \"${{ matrix.qt-arch }}\"; then
+                  echo \"❌ Architecture ${{ matrix.qt-arch }} not available, skipping build.\"
+                  exit 0
+              fi
+
+              echo '=== Installing Qt ==='
               export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
               aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
-                --outputdir ${{ github.workspace }}/Qt
+                --outputdir ${{ github.workspace }}/Qt \
+                --modules qtbase
 
               # 设置 Qt 环境变量
               export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}
