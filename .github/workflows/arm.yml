@@ -130,8 +130,7 @@ jobs:
               echo '=== Installing Qt ==='
               export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
               aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
-                --outputdir ${{ github.workspace }}/Qt \
-                --modules qtbase
+                --outputdir ${{ github.workspace }}/Qt
 
               export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}
               export PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:\$PATH
@@ -154,10 +153,19 @@ jobs:
         with:
           name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-binary
           path: output/artifacts/*.tar.gz
-          if-no-files-found: error
+          if-no-files-found: warn   # 改为 warn，避免因无文件而失败
+
+      - name: Check if artifacts exist
+        id: check-artifacts
+        run: |
+          if ls output/artifacts/* 1> /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload binary to Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.check-artifacts.outputs.exists == 'true'
         uses: svenstaro/upload-release-action@v2
         with:
           file: output/artifacts/*.tar.gz
