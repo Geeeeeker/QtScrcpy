@@ -1,0 +1,64 @@
+name: Ubuntu x86 (Manual Dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Comma-separated list of x86 architectures to build (i386, amd64)'
+        required: true
+        default: 'amd64'
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          arch_map='{
+            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:22.04"},
+            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"}
+          }'
+          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
+          entries=()
+          for arch in "${archs[@]}"; do
+            arch=$(echo "$arch" | xargs)
+            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
+            if [[ -n "$entry" ]]; then
+              entries+=("$entry")
+            else
+              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
+            fi
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "❌ 错误: 没有有效的 x86 架构可构建"
+            exit 1
+          fi
+          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: Build ${{ matrix.gcc-arch }}
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      target-name: QtScrcpy
+      qt-ver: '5.15.2'
+      plantform-des: ubuntu
+    steps:
+      - name: Set up QEMU (for i386)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
