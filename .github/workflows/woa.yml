@@ -18,30 +18,19 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射：qt-arch-install 使用完整架构名（与 aqt 安装目录名一致）
           arch_map='{
             "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"win32_msvc2019"},
             "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"win64_msvc2019_64"},
             "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"win64_msvc2019_arm64"}
           }'
-
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           entries=()
           for arch in "${archs[@]}"; do
             arch=$(echo "$arch" | xargs)
             entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
-            if [[ -n "$entry" ]]; then
-              entries+=("$entry")
-            else
-              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
-            fi
+            if [[ -n "$entry" ]]; then entries+=("$entry"); else echo "⚠️ 忽略未知架构 '$arch'"; fi
           done
-
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的架构可构建"
-            exit 1
-          fi
-
+          if [ ${#entries[@]} -eq 0 ]; then echo "❌ 没有有效架构"; exit 1; fi
           matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
@@ -77,7 +66,7 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: pip install aqtinstall
 
-      - name: Set aqt mirror
+      - name: Set aqt mirror (清华源)
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
 
@@ -100,12 +89,15 @@ jobs:
         run: |
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase
-          # 设置 CMake 查找路径
+            --modules qtbase qtsvg qttools   # 增加模块以确保 CMake 配置完整
           QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
           echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+          echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV      # 备用
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
           echo "$QT_ROOT/bin" >> $GITHUB_PATH
+          # 调试：列出 Qt 安装目录
+          echo "Contents of Qt installation:"
+          ls -R "$QT_ROOT" || true
 
       - name: Skip if architecture unavailable
         if: steps.check-arch.outputs.available == 'false'
@@ -118,6 +110,22 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
+
+      - name: Verify Qt environment
+        shell: bash
+        run: |
+          echo "Qt5_DIR=$Qt5_DIR"
+          echo "QT_DIR=$QT_DIR"
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
+          echo "PATH=$PATH"
+          # 检查 Qt5Config.cmake 是否存在
+          if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
+            echo "✅ Qt5Config.cmake found"
+          else
+            echo "❌ Qt5Config.cmake not found"
+            # 尝试查找所有 config 文件
+            find "${{ env.qt-install-path }}" -name "*Config.cmake" 2>/dev/null || true
+          fi
 
       - name: Build MSVC
         shell: cmd
