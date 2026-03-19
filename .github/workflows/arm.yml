@@ -1,10 +1,10 @@
-name: Ubuntu (Manual Dispatch Multi-Arch)
+name: Ubuntu ARM (Manual Dispatch)
 
 on:
   workflow_dispatch:
     inputs:
       architectures:
-        description: 'Comma-se-separated list of architectures to build (arm, arm64, i386, amd64)'
+        description: 'Comma-separated list of ARM architectures to build (arm, arm64)'
         required: true
         default: 'arm64'
         type: string
@@ -19,10 +19,8 @@ jobs:
         id: set-matrix
         run: |
           arch_map='{
-            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:22.04"},
-            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"},
-            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64","gcc-arch":"arm64","container-image":"arm64v8/ubuntu:22.04"},
-            "arm":   {"platform":"linux/arm/v7","qt-arch":"linux_armv7","gcc-arch":"arm","container-image":"arm32v7/ubuntu:22.04"}
+            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64", "gcc-arch":"arm64", "container-image":"arm64v8/ubuntu:22.04"},
+            "arm":   {"platform":"linux/arm/v7", "qt-arch":"linux_armv7", "gcc-arch":"arm",   "container-image":"arm32v7/ubuntu:22.04"}
           }'
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           entries=()
@@ -36,7 +34,7 @@ jobs:
             fi
           done
           if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的架构可构建"
+            echo "❌ 错误: 没有有效的 ARM 架构可构建"
             exit 1
           fi
           matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
@@ -66,7 +64,7 @@ jobs:
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      - name: Get the version
+      - name: Get the version (for tag)
         id: get-version
         run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
 
@@ -81,7 +79,7 @@ jobs:
             -e DEBIAN_FRONTEND=noninteractive \
             -e GITHUB_WORKSPACE=${{ github.workspace }} \
             -e GITHUB_REF=${{ github.ref }} \
-            -e VERSION="${{ steps.get-version.outputs.version }}" \
+            -e VERSION="${{ env.VERSION }}" \
             ${{ matrix.container-image }} \
             bash -c "
               set -e
@@ -114,33 +112,12 @@ jobs:
                 fuse \
                 libasound2-dev
 
-              echo '=== Setting up FUSE ==='
-              apt-get install -y fuse
-              if [ ! -e /dev/fuse ]; then
-                mknod /dev/fuse c 10 229 || true
-                chmod 666 /dev/fuse || true
-              fi
-              export APPIMAGE_EXTRACT_AND_RUN=1
-
               echo '=== Installing Python and aqt ==='
-              . /etc/os-release
-              if [ \"\$VERSION_ID\" = \"20.04\" ]; then
-                  # Ubuntu 20.04 (i386) 通过 deadsnakes 安装 Python 3.11
-                  apt-get install -y software-properties-common curl
-                  add-apt-repository -y ppa:deadsnakes/ppa
-                  apt-get update
-                  apt-get install -y python3.11 python3.11-distutils python3.11-venv
-                  update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-                  curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-              else
-                  # Ubuntu 22.04+ 使用系统 Python 3.10
-                  apt-get install -y python3 python3-pip
-              fi
+              apt-get install -y python3 python3-pip
               pip3 install --upgrade pip
               pip3 install 'aqtinstall>=3.3'
 
-              # 设置镜像源（可选）
-              export AQT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/qt'
+              # 可选镜像源：export AQT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/qt'
 
               echo '=== Checking available architectures for Qt ${{ env.qt-ver }} ==='
               AVAIL_ARCH=\$(aqt list-qt linux desktop --arch ${{ env.qt-ver }})
@@ -165,84 +142,26 @@ jobs:
               echo '=== Building ==='
               ci/linux/build_for_linux.sh 'Release'
 
-              # 判断是否为 x86 架构
-              ARCH_NAME=\"${{ matrix.gcc-arch }}\"
-              IS_X86=false
-              if [[ \"\$ARCH_NAME\" == \"x64\" || \"\$ARCH_NAME\" == \"x86\" ]]; then
-                  IS_X86=true
-              fi
-
-              # 打包所有编译产物为 tar.gz
               echo '=== Packaging binary tarball ==='
-              TARBALL_NAME=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
-              # 假设编译产物在 output/Release 目录（根据 build_for_linux.sh 调整）
-              if [ -d output/Release ]; then
-                  tar -czvf \"\$TARBALL_NAME\" -C output/Release . || echo 'Warning: tarball creation failed'
-              else
-                  echo 'Warning: output/Release not found, skipping tarball'
-              fi
-
-              # 如果是 x86 架构，生成 AppImage
-              if [ \"\$IS_X86\" = true ]; then
-                  echo '=== Packaging AppImage ==='
-                  chmod +x ci/linux/package_appimage.sh
-                  ci/linux/package_appimage.sh 'Release'
-                  # 假设 AppImage 生成在 output/appimage/ 下
-                  APPIMAGE_FILE=\$(find output/appimage -name \"*.AppImage\" -type f | head -n 1)
-                  if [ -n \"\$APPIMAGE_FILE\" ]; then
-                      cp \"\$APPIMAGE_FILE\" ./ || echo 'Warning: AppImage copy failed'
-                  else
-                      echo 'Warning: AppImage not found'
-                  fi
-              fi
-
-              # 将生成的包复制到共享目录
               mkdir -p ${{ github.workspace }}/output/artifacts
-              cp ./*.tar.gz ${{ github.workspace }}/output/artifacts/ 2>/dev/null || true
-              cp ./*.AppImage ${{ github.workspace }}/output/artifacts/ 2>/dev/null || true
+              BIN_TAR=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
+              tar -czf \"\$BIN_TAR\" -C output/Release .
+              cp \"\$BIN_TAR\" ${{ github.workspace }}/output/artifacts/
             "
 
-      - name: List artifacts
-        run: ls -la output/artifacts/
-
-      - name: Upload binary tarball artifact
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-tarball
+          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-binary
           path: output/artifacts/*.tar.gz
-          if-no-files-found: warn
+          if-no-files-found: error
 
-      - name: Upload AppImage artifact (if exists)
-        if: matrix.gcc-arch == 'x64' || matrix.gcc-arch == 'x86'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-AppImage
-          path: output/artifacts/*.AppImage
-          if-no-files-found: warn
-
-      # 准备 release 上传
-      - name: Copy artifacts to workspace root for release
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          cp output/artifacts/*.tar.gz ./ || true
-          cp output/artifacts/*.AppImage ./ || true
-
-      - name: Upload binary tarball to Releases
+      - name: Upload binary to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
         with:
-          file: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}.tar.gz
-          asset_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}.tar.gz
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          overwrite: true
-
-      - name: Upload AppImage to Releases (if exists)
-        if: startsWith(github.ref, 'refs/tags/') && (matrix.gcc-arch == 'x64' || matrix.gcc-arch == 'x86')
-        uses: svenstaro/upload-release-action@v2
-        with:
-          file: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}.AppImage
-          asset_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}.AppImage
+          file: output/artifacts/*.tar.gz
+          file_glob: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           overwrite: true
