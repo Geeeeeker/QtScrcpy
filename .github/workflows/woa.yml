@@ -18,7 +18,7 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射（qt-arch-install 与 qt-arch 保持一致，确保路径正确）
+          # 架构映射：qt-arch-install 使用完整架构名（与 aqt 安装目录名一致）
           arch_map='{
             "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"win32_msvc2019"},
             "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"win64_msvc2019_64"},
@@ -89,10 +89,8 @@ jobs:
           AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }})
           echo "Available architectures: $AVAIL_ARCH"
           if echo "$AVAIL_ARCH" | grep -q "${{ matrix.qt-arch }}"; then
-            echo "✅ Architecture ${{ matrix.qt-arch }} is available."
             echo "available=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ Architecture ${{ matrix.qt-arch }} is NOT available. Skipping this job."
             echo "available=false" >> $GITHUB_OUTPUT
           fi
 
@@ -103,9 +101,11 @@ jobs:
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
             --modules qtbase
-          # 设置环境变量供后续构建使用
-          echo "Qt5_DIR=${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}" >> $GITHUB_ENV
-          echo "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}/bin" >> $GITHUB_PATH
+          # 设置 CMake 查找路径
+          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
+          echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
+          echo "$QT_ROOT/bin" >> $GITHUB_PATH
 
       - name: Skip if architecture unavailable
         if: steps.check-arch.outputs.available == 'false'
