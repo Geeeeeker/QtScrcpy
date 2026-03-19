@@ -18,11 +18,11 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 架构映射（已移除 arm）
+          # 架构映射（qt-arch-install 与 qt-arch 保持一致，确保路径正确）
           arch_map='{
-            "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"msvc2019"},
-            "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"msvc2019_64"},
-            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"msvc2019_arm64"}
+            "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"win32_msvc2019"},
+            "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"win64_msvc2019_64"},
+            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"win64_msvc2019_arm64"}
           }'
 
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
@@ -77,13 +77,16 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: pip install aqtinstall
 
+      - name: Set aqt mirror
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
+
       - name: Check available architectures for Qt ${{ env.qt-ver }}
         if: steps.cache-qt.outputs.cache-hit != 'true'
         id: check-arch
         shell: bash
         run: |
-          # 使用清华镜像源列出可用架构
-          AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }} --base https://mirrors.tuna.tsinghua.edu.cn/qt)
+          AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }})
           echo "Available architectures: $AVAIL_ARCH"
           if echo "$AVAIL_ARCH" | grep -q "${{ matrix.qt-arch }}"; then
             echo "✅ Architecture ${{ matrix.qt-arch }} is available."
@@ -99,8 +102,7 @@ jobs:
         run: |
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
-            --base https://mirrors.tuna.tsinghua.edu.cn/qt \
-            --modules qtbase   # 可根据需要添加其他模块，如 qtsvg qttools 等
+            --modules qtbase
           # 设置环境变量供后续构建使用
           echo "Qt5_DIR=${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}" >> $GITHUB_ENV
           echo "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}/bin" >> $GITHUB_PATH
