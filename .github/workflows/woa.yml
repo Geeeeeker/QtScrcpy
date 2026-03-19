@@ -18,31 +18,35 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # 定义架构映射
-          declare -A arch_map
-          arch_map[i386]='{"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"msvc2019"}'
-          arch_map[amd64]='{"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"msvc2019_64"}'
-          arch_map[arm64]='{"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"msvc2019_arm64"}'
-          arch_map[arm]='{"qt-arch":"win32_msvc2019_arm","msvc-arch":"arm","qt-arch-install":"msvc2019_arm"}'
+          # 定义架构映射（紧凑 JSON 对象）
+          arch_map='{
+            "i386":  {"qt-arch":"win32_msvc2019","msvc-arch":"x86","qt-arch-install":"msvc2019"},
+            "amd64": {"qt-arch":"win64_msvc2019_64","msvc-arch":"x64","qt-arch-install":"msvc2019_64"},
+            "arm64": {"qt-arch":"win64_msvc2019_arm64","msvc-arch":"arm64","qt-arch-install":"msvc2019_arm64"},
+            "arm":   {"qt-arch":"win32_msvc2019_arm","msvc-arch":"arm","qt-arch-install":"msvc2019_arm"}
+          }'
 
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
-          matrix_entries=()
+          entries=()
           for arch in "${archs[@]}"; do
-            arch=$(echo "$arch" | xargs)  # 去除空格
-            if [[ -n "${arch_map[$arch]}" ]]; then
-              matrix_entries+=("${arch_map[$arch]}")
+            arch=$(echo "$arch" | xargs)  # 去除前后空格
+            # 从 arch_map 中提取对应条目（紧凑格式，若不存在则返回空）
+            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
+            if [[ -n "$entry" ]]; then
+              entries+=("$entry")
             else
-              echo "警告: 未知架构 $arch，已忽略"
+              echo "警告: 未知架构 '$arch'，已忽略"
             fi
           done
 
-          # 构建 JSON 数组
-          if [ ${#matrix_entries[@]} -eq 0 ]; then
+          if [ ${#entries[@]} -eq 0 ]; then
             echo "错误: 没有有效的架构可构建"
             exit 1
           fi
-          matrix_json=$(printf '%s\n' "${matrix_entries[@]}" | jq -s '.')
-          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+
+          # 将 entries 数组合并为紧凑的 JSON 数组
+          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -91,7 +95,7 @@ jobs:
       - name: Get the version
         shell: bash
         id: get-version
-        run: echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
 
       - name: Package
         id: package
@@ -103,7 +107,7 @@ jobs:
         run: |
           cmd.exe /c ci\win\publish_for_win.bat ${{ matrix.msvc-arch }} ..\build\${{ env.publish_name }}
           Compress-Archive -Path ci\build\${{ env.publish_name }} ci\build\${{ env.publish_name }}.zip
-          echo "package-name=${{ env.publish_name }}" >> $GITHUB_OUTPUT
+          echo "package-name=${{ env.publish_name }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
