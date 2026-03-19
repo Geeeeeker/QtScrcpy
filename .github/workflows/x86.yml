@@ -1,0 +1,200 @@
+name: Ubuntu x86 (Manual Dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Comma-separated list of x86 architectures to build (i386, amd64)'
+        required: true
+        default: 'amd64'
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          arch_map='{
+            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:22.04"},
+            "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"}
+          }'
+          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
+          entries=()
+          for arch in "${archs[@]}"; do
+            arch=$(echo "$arch" | xargs)
+            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
+            if [[ -n "$entry" ]]; then
+              entries+=("$entry")
+            else
+              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
+            fi
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "❌ 错误: 没有有效的 x86 架构可构建"
+            exit 1
+          fi
+          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: Build ${{ matrix.gcc-arch }}
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      target-name: QtScrcpy
+      qt-ver: '5.15.2'
+      plantform-des: ubuntu
+    steps:
+      - name: Set up QEMU (for i386)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+          ssh-key: ${{ secrets.BOT_SSH_KEY }}
+
+      - name: Get the version (for tag)
+        id: get-version
+        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build in Docker container
+        env:
+          VERSION: ${{ steps.get-version.outputs.version }}
+        run: |
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v ${{ github.workspace }}:${{ github.workspace }} \
+            -w ${{ github.workspace }} \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e GITHUB_WORKSPACE=${{ github.workspace }} \
+            -e GITHUB_REF=${{ github.ref }} \
+            -e VERSION="${{ env.VERSION }}" \
+            ${{ matrix.container-image }} \
+            bash -c "
+              set -e
+              echo '=== Installing basic dependencies ==='
+              apt-get update
+              apt-get install -y git ca-certificates sudo
+
+              echo '=== Installing system dependencies ==='
+              apt-get update
+              apt-get install -y \
+                build-essential \
+                cmake \
+                libglew-dev \
+                libglfw3-dev \
+                imagemagick \
+                wget \
+                patchelf \
+                zip \
+                libxcb1-dev \
+                libxkbcommon-dev \
+                libxkbcommon-x11-dev \
+                libx11-dev \
+                libx11-xcb-dev \
+                libfontconfig1-dev \
+                libfreetype6-dev \
+                libxrender-dev \
+                libxext-dev \
+                gnupg \
+                lsb-release \
+                fuse \
+                libasound2-dev
+
+              echo '=== Setting up FUSE ==='
+              apt-get install -y fuse
+              if [ ! -e /dev/fuse ]; then
+                mknod /dev/fuse c 10 229 || true
+                chmod 666 /dev/fuse || true
+              fi
+              export APPIMAGE_EXTRACT_AND_RUN=1
+
+              echo '=== Installing Python and aqt ==='
+              # 对 i386 需单独处理 Python 版本
+              . /etc/os-release
+              if [ \"\$VERSION_ID\" = \"20.04\" ]; then
+                  # Ubuntu 20.04 (i386) 通过 deadsnakes 安装 Python 3.11
+                  apt-get install -y software-properties-common curl
+                  add-apt-repository -y ppa:deadsnakes/ppa
+                  apt-get update
+                  apt-get install -y python3.11 python3.11-distutils python3.11-venv
+                  update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+                  curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+              else
+                  # Ubuntu 22.04 (amd64) 使用系统 Python 3.10
+                  apt-get install -y python3 python3-pip
+              fi
+              pip3 install --upgrade pip
+              pip3 install 'aqtinstall>=3.3'
+
+              # 可选镜像源：export AQT_MIRROR='https://mirrors.tuna.tsinghua.edu.cn/qt'
+
+              echo '=== Checking available architectures for Qt ${{ env.qt-ver }} ==='
+              AVAIL_ARCH=\$(aqt list-qt linux desktop --arch ${{ env.qt-ver }})
+              echo \"Available architectures: \$AVAIL_ARCH\"
+              if ! echo \"\$AVAIL_ARCH\" | grep -q \"${{ matrix.qt-arch }}\"; then
+                  echo \"❌ Architecture ${{ matrix.qt-arch }} not available, skipping build.\"
+                  exit 0
+              fi
+
+              echo '=== Installing Qt ==='
+              export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
+              aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
+                --outputdir ${{ github.workspace }}/Qt \
+                --modules qtbase
+
+              export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}
+              export PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:\$PATH
+
+              echo '=== Generating version ==='
+              python3 ci/generate-version.py
+
+              echo '=== Building ==='
+              ci/linux/build_for_linux.sh 'Release'
+
+              echo '=== Packaging binary tarball ==='
+              mkdir -p ${{ github.workspace }}/output/artifacts
+              BIN_TAR=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
+              tar -czf \"\$BIN_TAR\" -C output/Release .
+              cp \"\$BIN_TAR\" ${{ github.workspace }}/output/artifacts/
+
+              echo '=== Packaging AppImage ==='
+              chmod +x ci/linux/package_appimage.sh
+              ci/linux/package_appimage.sh 'Release'
+              APPIMAGE_FILE=\$(find output/appimage -name '*.AppImage' -type f | head -n 1)
+              if [ -f \"\$APPIMAGE_FILE\" ]; then
+                  APPIMAGE_NAME=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.AppImage\"
+                  cp \"\$APPIMAGE_FILE\" \"\$APPIMAGE_NAME\"
+                  cp \"\$APPIMAGE_NAME\" ${{ github.workspace }}/output/artifacts/
+              else
+                  echo '⚠️ AppImage not found, skipping.'
+              fi
+            "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}
+          path: output/artifacts/*
+          if-no-files-found: error
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: output/artifacts/*
+          file_glob: true
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          overwrite: true
