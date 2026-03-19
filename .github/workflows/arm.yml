@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       architectures:
-        description: 'Comma-separated list of architectures to build (arm, arm64, i386, amd64)'
+        description: 'Comma-se-separated list of architectures to build (arm, arm64, i386, amd64)'
         required: true
         default: 'amd64'
         type: string
@@ -18,11 +18,12 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
+          # 架构映射：对 amd64/arm64/arm 使用 Ubuntu 22.04，i386 使用 20.04（因 22.04 无官方 i386 镜像）
           arch_map='{
-            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:20.04"},
+            "amd64": {"platform":"linux/amd64","qt-arch":"gcc_64","gcc-arch":"x64","container-image":"ubuntu:22.04"},
             "i386":  {"platform":"linux/386",  "qt-arch":"gcc_32","gcc-arch":"x86","container-image":"i386/ubuntu:20.04"},
-            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64","gcc-arch":"arm64","container-image":"arm64v8/ubuntu:20.04"},
-            "arm":   {"platform":"linux/arm/v7","qt-arch":"linux_armv7","gcc-arch":"arm","container-image":"arm32v7/ubuntu:20.04"}
+            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64","gcc-arch":"arm64","container-image":"arm64v8/ubuntu:22.04"},
+            "arm":   {"platform":"linux/arm/v7","qt-arch":"linux_armv7","gcc-arch":"arm","container-image":"arm32v7/ubuntu:22.04"}
           }'
           IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
           entries=()
@@ -125,17 +126,23 @@ jobs:
                 apt-get install -y cmake
               }
 
-              echo '=== Installing aqt and dependencies ==='
-              # 安装 Python 3.11
-              apt-get install -y software-properties-common curl
-              add-apt-repository -y ppa:deadsnakes/ppa
-              apt-get update
-              apt-get install -y python3.11 python3.11-distutils python3.11-venv
-              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-              # 安装 pip for Python 3.11
-              curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-
-              # 安装 aqt
+              echo '=== Installing Python and aqt ==='
+              # 检测系统版本
+              . /etc/os-release
+              if [ \"\$VERSION_ID\" = \"20.04\" ]; then
+                  # Ubuntu 20.04 (i386) 通过 deadsnakes 安装 Python 3.11
+                  apt-get install -y software-properties-common curl
+                  add-apt-repository -y ppa:deadsnakes/ppa
+                  apt-get update
+                  apt-get install -y python3.11 python3.11-distutils python3.11-venv
+                  update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+                  curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+              else
+                  # Ubuntu 22.04+ 使用系统 Python 3.10
+                  apt-get install -y python3 python3-pip
+              fi
+              # 升级 pip 并安装 aqt
+              pip3 install --upgrade pip
               pip3 install 'aqtinstall>=3.3'
 
               # 设置镜像源（可选，使用清华源提高速度）
