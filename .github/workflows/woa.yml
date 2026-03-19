@@ -1,4 +1,4 @@
- name: Build with CMake
+name: Build with CMake
   shell: cmd
   env:
     ENV_VCVARSALL: ${{ env.vcvarsall-path }}
