@@ -21,8 +21,7 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # GitHub 官方仅提供 ARM64 原生运行器，且 Node 24 将不再支持 ARM32 [citation:7]
-          # 因此矩阵目前只支持 arm64，如需 arm32 仍需使用 QEMU 方案
+          # GitHub 官方仅提供 ARM64 原生运行器
           arch_map='{
             "arm64": {"runner":"ubuntu-24.04-arm", "gcc-arch":"arm64", "qt-configure-args":"-xcb -system-xcb"}
           }'
@@ -57,7 +56,6 @@ jobs:
   build-qt:
     needs: prepare
     name: Build Qt 5.15.2 for ${{ matrix.gcc-arch }}
-    # 关键修改：直接使用原生 ARM 运行器 [citation:6]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -108,9 +106,17 @@ jobs:
       - name: Download Qt source
         run: |
           QT_MAJOR_MINOR=$(echo ${{ env.QT_VERSION }} | cut -d. -f1-2)
-          QT_SRC_URL="https://download.qt.io/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
-          echo "Downloading Qt source from $QT_SRC_URL"
-          wget -q ${QT_SRC_URL} -O qt-src.tar.xz
+          OFFICIAL_URL="https://download.qt.io/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
+          MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/qt/archive/qt/${QT_MAJOR_MINOR}/${{ env.QT_VERSION }}/single/qt-everywhere-opensource-src-${{ env.QT_VERSION }}.tar.xz"
+          
+          echo "Downloading Qt source from official source..."
+          if wget --timeout=30 --tries=3 --retry-connrefused -O qt-src.tar.xz "$OFFICIAL_URL"; then
+            echo "Downloaded from official source successfully."
+          else
+            echo "Official source failed, trying mirror: $MIRROR_URL"
+            wget --timeout=30 --tries=3 --retry-connrefused -O qt-src.tar.xz "$MIRROR_URL"
+          fi
+          
           tar -xf qt-src.tar.xz
 
       - name: Configure and build Qt
@@ -118,7 +124,6 @@ jobs:
           cd qt-everywhere-src-${{ env.QT_VERSION }}
           mkdir build && cd build
           
-          # 配置 Qt，可根据需要调整参数
           ../configure -prefix /opt/Qt/${{ env.QT_VERSION }}/${{ matrix.gcc-arch }} \
             -opensource -confirm-license \
             -nomake examples -nomake tests \
@@ -130,7 +135,6 @@ jobs:
             -no-iconv -no-tslib -no-pch \
             -optimize-size -release
           
-          # 利用所有 CPU 核心编译
           make -j$(nproc)
           sudo make install
 
