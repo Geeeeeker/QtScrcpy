@@ -54,7 +54,7 @@ jobs:
       vcinstall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC'
       qt-ver: '5.15.2'
       qt-install-path: ${{ github.workspace }}/Qt
-      plantform-des: win   # 原项目写法，保留
+      plantform-des: win
     steps:
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -90,28 +90,13 @@ jobs:
             echo "available=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install Qt (manual)
+      - name: Install Qt (if cache miss)
         if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
         shell: bash
         run: |
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
             --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
-          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}"
-          # 查找 Qt5Config.cmake 的正确位置
-          QT5_CMAKE_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
-          if [ -n "$QT5_CMAKE_DIR" ]; then
-            echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
-            echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-            echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-          else
-            echo "⚠️ Qt5Config.cmake not found, using default paths."
-            echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
-            echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
-          fi
-          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
-          echo "$QT_ROOT/bin" >> $GITHUB_PATH
-          echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV
 
       - name: Skip if architecture unavailable
         if: steps.check-arch.outputs.available == 'false'
@@ -124,6 +109,33 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
           ssh-key: ${{ secrets.BOT_SSH_KEY }}
+
+      # ================ 关键修复：始终设置 Qt 环境变量 ================
+      - name: Set Qt environment variables (always)
+        shell: powershell
+        run: |
+          $qtRoot = "${{ env.qt-install-path }}\${{ env.qt-ver }}\${{ matrix.qt-arch-install }}"
+          Write-Host "Qt root: $qtRoot"
+
+          # 查找 Qt5Config.cmake
+          $qt5Config = Get-ChildItem -Path $qtRoot -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($qt5Config) {
+              $qt5Dir = $qt5Config.Directory.FullName
+              Write-Host "Found Qt5Config.cmake in $qt5Dir"
+          } else {
+              # 默认路径
+              $qt5Dir = "$qtRoot\lib\cmake\Qt5"
+              Write-Host "Using default Qt5 dir: $qt5Dir"
+          }
+
+          # 设置环境变量
+          echo "Qt5_DIR=$qt5Dir" >> $env:GITHUB_ENV
+          echo "QT_DIR=$qt5Dir" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$qtRoot" >> $env:GITHUB_ENV
+          echo "ENV_QT_PATH=$qtRoot" >> $env:GITHUB_ENV
+
+          # 将 Qt bin 目录加入 PATH
+          echo "$qtRoot\bin" >> $env:GITHUB_PATH
 
       - name: Verify Qt environment (debug)
         shell: cmd
@@ -177,7 +189,6 @@ jobs:
         shell: powershell
         env:
           ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ matrix.qt-arch-install }}
-          # 包名格式：包名-平台-架构-版本
           publish_name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           $outDir = "$pwd\build\$env:publish_name"
