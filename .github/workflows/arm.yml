@@ -1,174 +1,86 @@
-name: Ubuntu ARM (Manual Dispatch)
+
+name: Build QtScrcpy ARM/ARM64
 
 on:
-  workflow_dispatch:
-    inputs:
-      architectures:
-        description: 'Comma-separated list of ARM architectures to build (arm, arm64)'
-        required: true
-        default: 'arm64'
-        type: string
+  push:
+    paths:
+      - 'QtScrcpy/**'
+      - '!QtScrcpy/res/**'
+      - '.github/workflows/build-qtscrcpy-arm.yml'
+      - 'ci/linux/**'
+  pull_request:
+    paths:
+      - 'QtScrcpy/**'
+      - '!QtScrcpy/res/**'
+      - '.github/workflows/build-qtscrcpy-arm.yml'
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Generate matrix
-        id: set-matrix
-        run: |
-          arch_map='{
-            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64", "gcc-arch":"arm64", "container-image":"arm64v8/ubuntu:22.04"},
-            "arm":   {"platform":"linux/arm/v7", "qt-arch":"linux_armv7", "gcc-arch":"arm",   "container-image":"arm32v7/ubuntu:22.04"}
-          }'
-          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
-          entries=()
-          for arch in "${archs[@]}"; do
-            arch=$(echo "$arch" | xargs)
-            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
-            if [[ -n "$entry" ]]; then
-              entries+=("$entry")
-            else
-              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
-            fi
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的 ARM 架构可构建"
-            exit 1
-          fi
-          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
-          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: prepare
-    name: Build ${{ matrix.gcc-arch }}
+    name: Build QtScrcpy for ARM
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+        arch: [arm64]
+        qt_ver: [6.5.3]
     env:
-      target-name: QtScrcpy
-      plantform-des: ubuntu
+      target_name: QtScrcpy
+      qt_install_path: ${{ github.workspace }}/qt
+      platform_desc: ubuntu-${{ matrix.arch }}
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: ${{ matrix.platform }}
-
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
           submodules: 'true'
-          # 如需私有子模块，请配置 SSH 密钥并取消注释下一行
-          # ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
-      - name: Get the version (for tag)
-        id: get-version
-        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU for ARM emulation
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
 
-      - name: Build in Docker container
-        env:
-          VERSION: ${{ steps.get-version.outputs.version }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Install dependencies
         run: |
-          docker run --rm \
-            --platform ${{ matrix.platform }} \
-            -v ${{ github.workspace }}:${{ github.workspace }} \
-            -w ${{ github.workspace }} \
-            -e DEBIAN_FRONTEND=noninteractive \
-            -e GITHUB_WORKSPACE=${{ github.workspace }} \
-            -e GITHUB_REF=${{ github.ref }} \
-            -e VERSION="${{ env.VERSION }}" \
-            ${{ matrix.container-image }} \
-            bash -c "
-              set -e
-              echo '=== Installing basic dependencies ==='
-              apt-get update
-              apt-get install -y git ca-certificates sudo
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ git wget libgl1-mesa-dev libxcb-xinerama0
 
-              echo '=== Installing system dependencies ==='
-              apt-get update
-              apt-get install -y \
-                build-essential \
-                cmake \
-                libglew-dev \
-                libglfw3-dev \
-                imagemagick \
-                wget \
-                patchelf \
-                zip \
-                libxcb1-dev \
-                libxkbcommon-dev \
-                libxkbcommon-x11-dev \
-                libx11-dev \
-                libx11-xcb-dev \
-                libfontconfig1-dev \
-                libfreetype6-dev \
-                libxrender-dev \
-                libxext-dev \
-                gnupg \
-                lsb-release \
-                fuse \
-                libasound2-dev \
-                software-properties-common
+      - name: Download Qt installer for ARM64
+        run: |
+          wget https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/online_installers/qt-online-installer-linux-arm64-online.run -O qt-installer.run
+          chmod +x qt-installer.run
 
-              echo '=== Installing Python (optional) ==='
-              apt-get install -y python3 python3-pip
-              pip3 install --upgrade pip
+      - name: Install Qt for ARM64
+        run: |
+          ./qt-installer.run \
+            --root-path ${{ env.qt_install_path }} \
+            --accept-license \
+            --accept-optional-components \
+            --no-force-installation \
+            --verbose \
+            --add-component qt.qt6.${{ matrix.qt_ver }}.arm64 \
+            --add-component qt.qt6.${{ matrix.qt_ver }}.qtmultimedia \
+            --add-component qt.qt6.${{ matrix.qt_ver }}.qtdeclarative \
+            --add-component qt.tools.cmake \
+            --add-component qt.tools.ninja
 
-              echo '=== Installing Qt 6 from system repositories ==='
-              # 启用 universe 仓库
-              add-apt-repository -y universe
-              apt-get update
+      - name: Build QtScrcpy for ARM64
+        env:
+          ENV_QT_PATH: ${{ env.qt_install_path }}/Tools/QtCreator/bin
+        run: |
+          export QT_PATH=${{ env.qt_install_path }}/${{ matrix.qt_ver }}/gcc_64
+          export PATH=$QT_PATH/bin:$PATH
+          mkdir -p output/${{ matrix.arch }}/Release
+          ./ci/linux/build_for_linux.sh "Release"
 
-              # 核心必须包（普通开发包）
-              apt-get install -y qt6-base-dev qt6-multimedia-dev || true
-              # 私有开发包（项目可能需要 Qt6::CorePrivate 等）
-              apt-get install -y qt6-base-private-dev qt6-multimedia-private-dev || true
-              # 可选包（如果存在则安装，忽略失败）
-              apt-get install -y qt6-svg-dev qt6-declarative-dev qt6-tools-dev || true
-              apt-get install -y qt6-svg-private-dev qt6-declarative-private-dev || true
+      - name: Package ARM64 build
+        run: |
+          cd output/${{ matrix.arch }}/Release
+          zip -r ../../../QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}.zip QtScrcpy scrcpy-server
 
-              # 设置 Qt 6 环境变量
-              export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
-              export PATH=/usr/lib/qt6/bin:\$PATH
-
-              echo '=== Generating version ==='
-              python3 ci/generate-version.py
-
-              echo '=== Building ==='
-              ci/linux/build_for_linux.sh 'Release'
-
-              echo '=== Packaging binary tarball ==='
-              mkdir -p ${{ github.workspace }}/output/artifacts
-              BIN_TAR=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
-              tar -czf \"\$BIN_TAR\" -C output/Release .
-              cp \"\$BIN_TAR\" ${{ github.workspace }}/output/artifacts/
-            "
-
-      - name: Upload binary artifact
+      - name: Upload ARM64 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-binary
-          path: output/artifacts/*.tar.gz
-          if-no-files-found: warn
-
-      - name: Check if artifacts exist
-        id: check-artifacts
-        run: |
-          if ls output/artifacts/* 1> /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload binary to Release
-        if: startsWith(github.ref, 'refs/tags/') && steps.check-artifacts.outputs.exists == 'true'
-        uses: svenstaro/upload-release-action@v2
-        with:
-          file: output/artifacts/*.tar.gz
-          file_glob: true
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          overwrite: true
+          name: QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}
+          path: QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}.zip
