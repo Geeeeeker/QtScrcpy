@@ -1,162 +1,54 @@
-name: Build for Windows ARM64 (Qt6)
+name: QtScrcpy WOA Build
 
 on:
   push:
     branches: [ main, master ]
-    tags:
-      - 'v*'
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build ARM64
-    runs-on: windows-latest
-    env:
-      target-name: QtScrcpy
-      vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
-      qt-ver: '6.7.2'
-      qt-arch: 'win64_msvc2019_arm64'
-      msvc-arch: 'arm64'
-      qt-install-path: ${{ github.workspace }}/Qt
+  build-woa:
+    runs-on: windows-arm64
     steps:
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          python-version: '3.11'
-          architecture: 'x64'
+          submodules: recursive
 
-      # 不缓存，避免干扰
-      - name: Install aqt
-        run: pip install aqtinstall
-
-      - name: Set aqt mirror (清华源)
-        run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
-
-      - name: List available architectures for Qt ${{ env.qt-ver }}
-        shell: bash
-        run: |
-          aqt list-qt windows desktop --arch ${{ env.qt-ver }}
-
-      - name: List available modules for ARM64
-        shell: bash
-        run: |
-          aqt list-qt windows desktop --modules ${{ env.qt-ver }} ${{ env.qt-arch }}
-
-      - name: Install Qt ARM64 with verbose output
-        shell: bash
-        run: |
-          set -e
-          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
-            --outputdir ${{ env.qt-install-path }} -v
-          echo "Installation command finished."
-
-      - name: Verify and list Qt installation
-        shell: bash
-        run: |
-          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch }}"
-          echo "Expected Qt root: $QT_ROOT"
-          if [ -d "$QT_ROOT" ]; then
-            echo "✅ Qt installed successfully"
-            echo "Directory contents:"
-            find "$QT_ROOT" -maxdepth 2 -type d
-          else
-            echo "❌ Qt installation failed, listing available directories:"
-            find "${{ env.qt-install-path }}" -maxdepth 3 -type d 2>/dev/null || echo "No directories found"
-            exit 1
-          fi
-
-      - name: Setup Qt environment
-        id: setup-qt
-        shell: bash
-        run: |
-          QT_BASE="${{ env.qt-install-path }}/${{ env.qt-ver }}"
-          QT_ROOT="$QT_BASE/${{ env.qt-arch }}"
-          if [ ! -d "$QT_ROOT" ]; then
-            echo "❌ Could not find ARM64 Qt at $QT_ROOT"
-            exit 1
-          fi
-          echo "Found ARM64 Qt at: $QT_ROOT"
-
-          QT6_CMAKE_DIR="$QT_ROOT/lib/cmake/Qt6"
-          if [ -f "$QT6_CMAKE_DIR/Qt6Config.cmake" ]; then
-            echo "✅ Found Qt6Config.cmake in $QT6_CMAKE_DIR"
-            echo "Qt6_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
-          else
-            FOUND_DIR=$(find "$QT_ROOT" -name "Qt6Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
-            if [ -n "$FOUND_DIR" ]; then
-              QT6_CMAKE_DIR="$FOUND_DIR"
-              echo "✅ Found Qt6Config.cmake in $QT6_CMAKE_DIR"
-              echo "Qt6_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
-            else
-              echo "⚠️ Qt6Config.cmake not found"
-              exit 1
-            fi
-          fi
-
-          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
-          echo "$QT_ROOT/bin" >> $GITHUB_PATH
-          echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV
-
-      - uses: actions/checkout@v4
+      - name: Install Qt 5.15.2 for Windows ARM64 (MSVC 2019)
+        uses: jurplel/install-qt-action@v4
         with:
-          fetch-depth: 0
-          submodules: 'true'
+          version: '5.15.2'
+          target: desktop
+          arch: win_arm64_msvc2019_64
 
-      - name: Verify Qt environment
-        shell: bash
-        run: |
-          echo "Qt6_DIR=$Qt6_DIR"
-          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
-          echo "ENV_QT_PATH=$ENV_QT_PATH"
-          if [ -f "$Qt6_DIR/Qt6Config.cmake" ]; then
-            echo "✅ Qt6Config.cmake exists"
-          else
-            echo "❌ Qt6Config.cmake not found"
-            exit 1
-          fi
-
-      - name: Build with CMake (direct)
-        shell: cmd
-        env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.ENV_QT_PATH }}
-        run: |
-          call python ci\generate-version.py
-          call "%ENV_VCVARSALL%" ${{ env.msvc-arch }}
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A ${{ env.msvc-arch }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%"
-          cmake --build . --config RelWithDebInfo
-          cd ..
-
-      - name: Get the version
-        shell: bash
-        id: get-version
-        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        id: package
-        env:
-          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_VCINSTALL: ${{ env.vcinstall-path }}
-          ENV_QT_PATH: ${{ env.ENV_QT_PATH }}
-          publish_name: ${{ env.target-name }}-win-${{ env.msvc-arch }}-${{ steps.get-version.outputs.version }}
-        run: |
-          cmd.exe /c ci\win\publish_for_win.bat ${{ env.msvc-arch }} ..\build\${{ env.publish_name }}
-          Compress-Archive -Path ci\build\${{ env.publish_name }} ci\build\${{ env.publish_name }}.zip
-          echo "package-name=${{ env.publish_name }}" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
         with:
-          name: ${{ steps.package.outputs.package-name }}.zip
-          path: ci\build\${{ steps.package.outputs.package-name }}
+          distribution: 'temurin'
+          java-version: '11'
 
-      - name: Upload Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: svenstaro/upload-release-action@v2
+      - name: Build scrcpy-server.apk
+        run: |
+          cd server
+          ./gradlew assembleRelease
+          cp build/outputs/apk/release/app-release.apk ../QtScrcpyCore/src/third_party/scrcpy-server
+          ren ../QtScrcpyCore/src/third_party/scrcpy-server app-release.apk scrcpy-server
+
+      - name: Configure CMake for Release (ARM64)
+        run: |
+          mkdir -p output/arm64/Release
+          cd output/arm64/Release
+          cmake -G "Visual Studio 17 2022" -A ARM64 -DCMAKE_BUILD_TYPE=Release ../../..
+
+      - name: Build QtScrcpy.exe (Release)
+        run: |
+          cmake --build . --config Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ci\build\${{ steps.package.outputs.package-name }}.zip
-          asset_name: ${{ steps.package.outputs.package-name }}.zip
-          tag: ${{ github.ref }}
-          overwrite: true
+          name: QtScrcpy-WOA
+          path: output/arm64/Release/QtScrcpy.exe
+          retention-days: 1
