@@ -1,196 +1,28 @@
-name: Ubuntu ARM (Manual Dispatch)
-
-on:
-  workflow_dispatch:
-    inputs:
-      architectures:
-        description: 'Comma-separated list of ARM architectures to build (arm, arm64)'
-        required: true
-        default: 'arm64'
-        type: string
-      qt-version:
-        description: 'Qt version to use (e.g., 6.7.0)'
-        required: true
-        default: '6.7.0'
-        type: string
-      use-mirror:
-        description: 'Use aqt mirror (leave empty for default, or set to https://mirrors.tuna.tsinghua.edu.cn/qt)'
-        required: false
-        default: 'https://mirrors.tuna.tsinghua.edu.cn/qt'
-        type: string
-
-jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Generate matrix
-        id: set-matrix
-        run: |
-          arch_map='{
-            "arm64": {"platform":"linux/arm64", "qt-arch":"linux_arm64", "gcc-arch":"arm64", "container-image":"arm64v8/ubuntu:22.04"},
-            "arm":   {"platform":"linux/arm/v7", "qt-arch":"linux_armv7", "gcc-arch":"arm",   "container-image":"arm32v7/ubuntu:22.04"}
-          }'
-          IFS=',' read -ra archs <<< "${{ github.event.inputs.architectures }}"
-          entries=()
-          for arch in "${archs[@]}"; do
-            arch=$(echo "$arch" | xargs)
-            entry=$(echo "$arch_map" | jq -c --arg a "$arch" '.[$a] // empty')
-            if [[ -n "$entry" ]]; then
-              entries+=("$entry")
-            else
-              echo "⚠️ 警告: 未知架构 '$arch'，已忽略"
-            fi
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "❌ 错误: 没有有效的 ARM 架构可构建"
-            exit 1
-          fi
-          matrix_json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
-          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: prepare
-    name: Build ${{ matrix.gcc-arch }} (Qt ${{ inputs.qt-version }})
-    runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    env:
-      target-name: QtScrcpy
-      qt-ver: ${{ inputs.qt-version }}
-      plantform-des: ubuntu
-    steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: ${{ matrix.platform }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: 'true'
-          # 如需私有子模块，配置 SSH 密钥
-          # ssh-key: ${{ secrets.BOT_SSH_KEY }}
-
-      - name: Get the version (for tag)
-        id: get-version
-        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Build in Docker container
-        env:
-          VERSION: ${{ steps.get-version.outputs.version }}
-        run: |
-          docker run --rm \
-            --platform ${{ matrix.platform }} \
-            -v ${{ github.workspace }}:${{ github.workspace }} \
-            -w ${{ github.workspace }} \
-            -e DEBIAN_FRONTEND=noninteractive \
-            -e GITHUB_WORKSPACE=${{ github.workspace }} \
-            -e GITHUB_REF=${{ github.ref }} \
-            -e VERSION="${{ env.VERSION }}" \
-            -e AQT_MIRROR="${{ inputs.use-mirror }}" \
-            ${{ matrix.container-image }} \
-            bash -c "
-              set -e
-              echo '=== Installing basic dependencies ==='
-              apt-get update
-              apt-get install -y git ca-certificates sudo
-
-              echo '=== Installing system dependencies ==='
-              apt-get update
-              apt-get install -y \
-                build-essential \
-                cmake \
-                libglew-dev \
-                libglfw3-dev \
-                imagemagick \
-                wget \
-                patchelf \
-                zip \
-                libxcb1-dev \
-                libxkbcommon-dev \
-                libxkbcommon-x11-dev \
-                libx11-dev \
-                libx11-xcb-dev \
-                libfontconfig1-dev \
-                libfreetype6-dev \
-                libxrender-dev \
-                libxext-dev \
-                gnupg \
-                lsb-release \
-                fuse \
-                libasound2-dev
-
-              echo '=== Installing Python and aqt ==='
-              apt-get install -y python3 python3-pip
-              pip3 install --upgrade pip
-              pip3 install 'aqtinstall>=3.3'
-
-              # 可选：如果 AQT_MIRROR 环境变量非空，则使用镜像
-              if [ -n \"\$AQT_MIRROR\" ]; then
-                echo \"Using mirror: \$AQT_MIRROR\"
-              fi
-
-              echo '=== Installing Qt ${{ env.qt-ver }} with required modules ==='
-              export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
-              # 尝试使用 aqt 安装 Qt 预编译包
-              set +e
-              aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
-                --outputdir ${{ github.workspace }}/Qt \
-                --modules qtmultimedia qtsvg   # 可根据需要添加更多模块
-              INSTALL_EXIT=\$?
-              set -e
-              if [ \$INSTALL_EXIT -ne 0 ]; then
-                echo \"⚠️ aqt 无法安装 ${{ matrix.qt-arch }} 的 Qt ${{ env.qt-ver }}, 尝试使用系统 apt 安装...\"
-                # 降级方案：使用 Ubuntu 官方仓库中的 Qt 6（版本可能较低）
-                apt-get install -y qt6-base-dev qt6-multimedia-dev qt6-svg-dev
-                # 设置环境变量指向系统 Qt
-                export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
-                export PATH=/usr/lib/qt6/bin:\$PATH
-              else
-                # aqt 安装成功，设置路径
-                export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/lib/cmake/Qt6
-                export PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:\$PATH
-              fi
-
-              echo '=== Generating version ==='
-              python3 ci/generate-version.py
-
-              echo '=== Building ==='
-              ci/linux/build_for_linux.sh 'Release'
-
-              echo '=== Packaging binary tarball ==='
-              mkdir -p ${{ github.workspace }}/output/artifacts
-              BIN_TAR=\"${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-\${VERSION}.tar.gz\"
-              tar -czf \"\$BIN_TAR\" -C output/Release .
-              cp \"\$BIN_TAR\" ${{ github.workspace }}/output/artifacts/
-            "
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.target-name }}-${{ env.plantform-des }}-${{ matrix.gcc-arch }}-${{ steps.get-version.outputs.version }}-binary
-          path: output/artifacts/*.tar.gz
-          if-no-files-found: warn
-
-      - name: Check if artifacts exist
-        id: check-artifacts
-        run: |
-          if ls output/artifacts/* 1> /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload binary to Release
-        if: startsWith(github.ref, 'refs/tags/') && steps.check-artifacts.outputs.exists == 'true'
-        uses: svenstaro/upload-release-action@v2
-        with:
-          file: output/artifacts/*.tar.gz
-          file_glob: true
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          overwrite: true
+echo '=== Installing Qt ${{ env.qt-ver }} with required modules ==='
+export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
+# 尝试使用 aqt 安装 Qt 预编译包
+set +e
+aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
+  --outputdir ${{ github.workspace }}/Qt \
+  --modules qtmultimedia qtsvg
+INSTALL_EXIT=$?
+set -e
+if [ $INSTALL_EXIT -ne 0 ]; then
+  echo "⚠️ aqt 无法安装 ${{ matrix.qt-arch }} 的 Qt ${{ env.qt-ver }}, 尝试使用系统 apt 安装..."
+  
+  # 启用 Ubuntu 官方 universe 仓库（包含 qt6-svg 等包）
+  add-apt-repository -y universe
+  
+  # 可选：添加较新 Qt 的可靠 PPA（如 ubuntu-toolchain-r/test 提供 Qt 6.5+，但仅 amd64；ARM 需谨慎）
+  # 此处直接使用 Ubuntu 22.04 官方源中的 Qt 6.2.4，包名正确
+  apt-get update
+  apt-get install -y qt6-base-dev qt6-multimedia-dev qt6-svg-dev
+  
+  # 设置环境变量指向系统 Qt
+  export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
+  export PATH=/usr/lib/qt6/bin:$PATH
+else
+  # aqt 安装成功，设置路径
+  export CMAKE_PREFIX_PATH=$QT_INSTALL_PATH/${{ matrix.qt-arch }}/lib/cmake/Qt6
+  export PATH=$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:$PATH
+fi
