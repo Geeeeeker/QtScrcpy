@@ -72,7 +72,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
-          # 如果需要私有子模块，请配置 SSH 密钥并取消注释下一行
+          # 如需私有子模块，配置 SSH 密钥
           # ssh-key: ${{ secrets.BOT_SSH_KEY }}
 
       - name: Get the version (for tag)
@@ -137,27 +137,22 @@ jobs:
               echo '=== Installing Qt ${{ env.qt-ver }} with required modules ==='
               export QT_INSTALL_PATH=${{ github.workspace }}/Qt/${{ env.qt-ver }}
               # 尝试使用 aqt 安装 Qt 预编译包
-              # 注意：如果某个架构在指定 Qt 版本中不可用，aqt 会报错，我们将捕获错误并回退到 apt
               set +e
               aqt install-qt linux desktop ${{ env.qt-ver }} ${{ matrix.qt-arch }} \
                 --outputdir ${{ github.workspace }}/Qt \
-                --modules qtmultimedia  # 可添加其他模块，如 qtimageformats, qtnetworkauth 等
+                --modules qtmultimedia qtsvg   # 可根据需要添加更多模块
               INSTALL_EXIT=\$?
               set -e
               if [ \$INSTALL_EXIT -ne 0 ]; then
                 echo \"⚠️ aqt 无法安装 ${{ matrix.qt-arch }} 的 Qt ${{ env.qt-ver }}, 尝试使用系统 apt 安装...\"
-                # 降级方案：使用 apt 安装 Qt 6（可能版本较低）
-                apt-get install -y software-properties-common
-                # 添加 Qt 官方 APT 仓库（提供较新版本）
-                add-apt-repository -y ppa:okirby/qt6-backports || true
-                apt-get update
-                apt-get install -y qt6-base-dev qt6-multimedia-dev
+                # 降级方案：使用 Ubuntu 官方仓库中的 Qt 6（版本可能较低）
+                apt-get install -y qt6-base-dev qt6-multimedia-dev qt6-svg-dev
                 # 设置环境变量指向系统 Qt
                 export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
                 export PATH=/usr/lib/qt6/bin:\$PATH
               else
                 # aqt 安装成功，设置路径
-                export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}
+                export CMAKE_PREFIX_PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/lib/cmake/Qt6
                 export PATH=\$QT_INSTALL_PATH/${{ matrix.qt-arch }}/bin:\$PATH
               fi
 
