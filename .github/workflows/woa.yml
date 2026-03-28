@@ -15,7 +15,7 @@ jobs:
       target-name: QtScrcpy
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       qt-ver: '6.7.2'
-      qt-arch: 'win64_msvc2019_arm64'      # 修正为实际可用架构
+      qt-arch: 'win64_msvc2019_arm64'
       msvc-arch: 'arm64'
       qt-arch-install: 'win64_msvc2019_arm64'
       qt-install-path: ${{ github.workspace }}/Qt
@@ -62,8 +62,7 @@ jobs:
           echo "Installing Qt ${{ env.qt-ver }} ${{ env.qt-arch }} to ${{ env.qt-install-path }}"
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2 \
-            --verbose
+            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
           echo "Installation finished."
 
       - name: Verify Qt installation
