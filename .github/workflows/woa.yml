@@ -1,210 +1,149 @@
-<#
-.SYNOPSIS
-    在 Windows on ARM 上自动编译 QtScrcpy ARM64 版本。
-.DESCRIPTION
-    该脚本会克隆 QtScrcpy 仓库，配置 Visual Studio 2022 ARM64 环境，
-    使用已安装的 Qt 进行编译，最后打包生成可执行文件压缩包。
-.NOTES
-    作者：自动化助手
-    版本：1.0
-    要求：Windows 11/10 on ARM64，已安装 Visual Studio 2022（含 ARM64 工具链）、
-          Git、Python、CMake，以及 Qt 5.15.2+（ARM64 版本）。
-#>
+name: Build for Windows ARM64
 
-# 设置错误时停止
-$ErrorActionPreference = "Stop"
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:   # 允许手动触发
 
-# ----- 可自定义配置 -----
-$RepoUrl = "https://github.com/barry-ran/QtScrcpy.git"          # 仓库地址（HTTPS）
-$BuildConfig = "RelWithDebInfo"                                 # 编译配置（Release/RelWithDebInfo/Debug）
-$OutputName = "QtScrcpy-win-arm64"                              # 输出文件夹前缀
-$QtInstallRoot = $null                                          # 如果为空则自动检测，可手动指定如 "C:\Qt\5.15.2\msvc2019_arm64"
-# ------------------------
+jobs:
+  build:
+    name: Build ARM64
+    runs-on: windows-latest
+    env:
+      target-name: QtScrcpy
+      vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
+      qt-ver: '5.15.2'
+      qt-arch: 'win64_msvc2019_arm64'      # Qt 官方 ARM64 架构名
+      msvc-arch: 'arm64'                   # MSVC 架构名
+      qt-arch-install: 'win64_msvc2019_arm64'   # 安装子目录名
+      qt-install-path: ${{ github.workspace }}/Qt
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
 
-# 辅助函数：检测可执行文件是否存在
-function Test-Command($command) {
-    $null = Get-Command $command -ErrorAction SilentlyContinue
-    return $?
-}
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.qt-install-path }}
+          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ env.qt-arch }}-v3
 
-# 检查必备工具
-Write-Host "=== 检查环境依赖 ==="
-$requiredTools = @("git", "python", "cmake")
-$missing = @()
-foreach ($tool in $requiredTools) {
-    if (-not (Test-Command $tool)) {
-        $missing += $tool
-    }
-}
-if ($missing.Count -gt 0) {
-    Write-Host "错误：缺少以下工具，请先安装：" -ForegroundColor Red
-    $missing | ForEach-Object { Write-Host "  - $_" }
-    exit 1
-}
-Write-Host "所有基本工具已就绪。"
+      - name: Install aqt (if cache miss)
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: pip install aqtinstall
 
-# 检查 Visual Studio 2022 环境
-$vsPath = "${env:ProgramFiles}\Microsoft Visual Studio\2022"
-if (Test-Path "$vsPath\Enterprise") { $vsEdition = "Enterprise" }
-elseif (Test-Path "$vsPath\Professional") { $vsEdition = "Professional" }
-elseif (Test-Path "$vsPath\Community") { $vsEdition = "Community" }
-else {
-    Write-Host "错误：未找到 Visual Studio 2022，请确保已安装并包含 ARM64 编译工具链。" -ForegroundColor Red
-    exit 1
-}
-$vcVarsPath = "$vsPath\$vsEdition\VC\Auxiliary\Build\vcvarsall.bat"
-if (-not (Test-Path $vcVarsPath)) {
-    Write-Host "错误：未找到 vcvarsall.bat，可能 Visual Studio 安装不完整。" -ForegroundColor Red
-    exit 1
-}
-Write-Host "找到 Visual Studio 2022 ($vsEdition)"
+      - name: Set aqt mirror (清华源)
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
 
-# 自动检测 Qt 安装路径
-if (-not $QtInstallRoot) {
-    Write-Host "正在自动检测 Qt ARM64 安装..."
-    $possiblePaths = @(
-        "C:\Qt\5.15.2\msvc2019_arm64",
-        "C:\Qt\5.15.2\win64_msvc2019_arm64",
-        "C:\Qt\6.*\msvc2019_arm64",
-        "$env:USERPROFILE\Qt\*"
-    )
-    $found = $false
-    foreach ($pattern in $possiblePaths) {
-        $matches = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer }
-        if ($matches) {
-            $QtInstallRoot = $matches[0].FullName
-            $found = $true
-            break
-        }
-    }
-    if (-not $found) {
-        Write-Host "错误：未找到 Qt ARM64 安装。请手动指定 `$QtInstallRoot 变量。" -ForegroundColor Red
-        exit 1
-    }
-}
-Write-Host "使用 Qt 路径：$QtInstallRoot"
+      - name: Check available architectures for Qt ${{ env.qt-ver }}
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        id: check-arch
+        shell: bash
+        run: |
+          AVAIL_ARCH=$(aqt list-qt windows desktop --arch ${{ env.qt-ver }})
+          echo "Available architectures: $AVAIL_ARCH"
+          if echo "$AVAIL_ARCH" | grep -q "${{ env.qt-arch }}"; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
 
-# 检查 Qt5Config.cmake 是否存在
-$qt5CmakeDir = "$QtInstallRoot\lib\cmake\Qt5"
-if (-not (Test-Path "$qt5CmakeDir\Qt5Config.cmake")) {
-    # 尝试在更深的目录查找
-    $foundCmake = Get-ChildItem -Path $QtInstallRoot -Recurse -Filter "Qt5Config.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($foundCmake) {
-        $qt5CmakeDir = Split-Path $foundCmake.DirectoryName -Parent
-        Write-Host "找到 Qt5Config.cmake 在 $qt5CmakeDir"
-    } else {
-        Write-Host "警告：未找到 Qt5Config.cmake，CMake 可能无法正确找到 Qt。" -ForegroundColor Yellow
-    }
-}
-$env:Qt5_DIR = $qt5CmakeDir
-$env:CMAKE_PREFIX_PATH = $QtInstallRoot
-Write-Host "设置环境变量："
-Write-Host "  Qt5_DIR = $qt5CmakeDir"
-Write-Host "  CMAKE_PREFIX_PATH = $QtInstallRoot"
+      - name: Install Qt (manual)
+        if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
+        shell: bash
+        run: |
+          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
+            --outputdir ${{ env.qt-install-path }} \
+            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
+          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}"
+          # 查找 Qt5Config.cmake 的正确位置
+          QT5_CMAKE_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
+          if [ -n "$QT5_CMAKE_DIR" ]; then
+            echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
+            echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+            echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+          else
+            echo "⚠️ Qt5Config.cmake not found, using default paths."
+            echo "Qt5_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+            echo "QT_DIR=$QT_ROOT/lib/cmake/Qt5" >> $GITHUB_ENV
+          fi
+          echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
+          echo "$QT_ROOT/bin" >> $GITHUB_PATH
+          echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV
 
-# 设置构建目录
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $scriptDir
+      - name: Skip if architecture unavailable
+        if: steps.check-arch.outputs.available == 'false'
+        run: |
+          echo "Architecture ${{ env.qt-arch }} not available, skipping build."
+          exit 0
 
-# 克隆仓库（如果不存在）
-if (-not (Test-Path "QtScrcpy")) {
-    Write-Host "=== 克隆仓库 ==="
-    git clone --recurse-submodules $RepoUrl QtScrcpy
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "克隆失败。" -ForegroundColor Red
-        exit 1
-    }
-}
-Set-Location "QtScrcpy"
-Write-Host "当前目录：$(Get-Location)"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'   # 不需要 SSH 密钥，公开子模块直接用 HTTPS
 
-# 生成版本头文件
-Write-Host "=== 生成版本信息 ==="
-python ci\generate-version.py
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "版本生成失败。" -ForegroundColor Red
-    exit 1
-}
+      - name: Verify Qt environment
+        shell: bash
+        run: |
+          echo "Qt5_DIR=$Qt5_DIR"
+          echo "QT_DIR=$QT_DIR"
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
+          echo "ENV_QT_PATH=$ENV_QT_PATH"
+          if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
+            echo "✅ Qt5Config.cmake exists at $Qt5_DIR/Qt5Config.cmake"
+          else
+            echo "❌ Qt5Config.cmake not found"
+            find "${{ env.qt-install-path }}" -name "Qt5Config.cmake" 2>/dev/null || true
+          fi
 
-# 创建构建目录
-$buildDir = "build_arm64"
-if (-not (Test-Path $buildDir)) {
-    New-Item -ItemType Directory -Path $buildDir | Out-Null
-}
-Set-Location $buildDir
+      - name: Build with CMake (direct)
+        shell: cmd
+        env:
+          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}
+        run: |
+          call python ci\generate-version.py
+          call "%ENV_VCVARSALL%" ${{ env.msvc-arch }}
+          if not exist build mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A ${{ env.msvc-arch }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%ENV_QT_PATH%"
+          cmake --build . --config RelWithDebInfo
+          cd ..
 
-# 配置 Visual Studio 环境并运行 CMake
-Write-Host "=== 配置 CMake (ARM64) ==="
-$cmakeArgs = @(
-    "..",
-    "-G", "Visual Studio 17 2022",
-    "-A", "arm64",
-    "-DCMAKE_BUILD_TYPE=$BuildConfig",
-    "-DCMAKE_PREFIX_PATH=`"$env:CMAKE_PREFIX_PATH`""
-)
-# 注意：我们需要在调用 cmake 前初始化 VS 环境，但 cmake 本身可以处理，不过最好先执行 vcvarsall
-Write-Host "初始化 Visual Studio ARM64 环境..."
-cmd /c "`"$vcVarsPath`" arm64 && set" | ForEach-Object {
-    if ($_ -match '^([^=]+)=(.*)$') {
-        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
-    }
-}
-Write-Host "执行 CMake：$cmakeArgs"
-& cmake $cmakeArgs
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "CMake 配置失败。" -ForegroundColor Red
-    exit 1
-}
+      - name: Get the version
+        shell: bash
+        id: get-version
+        run: echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
 
-# 编译
-Write-Host "=== 编译项目 ==="
-& cmake --build . --config $BuildConfig --parallel
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "编译失败。" -ForegroundColor Red
-    exit 1
-}
-Write-Host "编译成功。"
+      - name: Package
+        id: package
+        env:
+          ENV_VCVARSALL: ${{ env.vcvarsall-path }}
+          ENV_VCINSTALL: ${{ env.vcinstall-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}
+          publish_name: ${{ env.target-name }}-win-${{ env.msvc-arch }}-${{ steps.get-version.outputs.version }}
+        run: |
+          cmd.exe /c ci\win\publish_for_win.bat ${{ env.msvc-arch }} ..\build\${{ env.publish_name }}
+          Compress-Archive -Path ci\build\${{ env.publish_name }} ci\build\${{ env.publish_name }}.zip
+          echo "package-name=${{ env.publish_name }}" >> "$GITHUB_OUTPUT"
 
-# 打包
-Write-Host "=== 打包 ==="
-$version = (Get-Content ..\version.h | Select-String '#define VERSION' | ForEach-Object { $_ -replace '.*"([^"]+)".*', '$1' }).Trim()
-if (-not $version) {
-    $version = "unknown"
-}
-$packageName = "$OutputName-$version"
-$packageDir = "..\ci\build\$packageName"
-if (Test-Path $packageDir) {
-    Remove-Item -Recurse -Force $packageDir
-}
-New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.package-name }}.zip
+          path: ci\build\${{ steps.package.outputs.package-name }}
 
-Write-Host "调用打包脚本：ci\win\publish_for_win.bat arm64 $packageDir"
-$batScript = Resolve-Path "..\ci\win\publish_for_win.bat"
-if (Test-Path $batScript) {
-    cmd /c "`"$batScript`" arm64 `"$packageDir`""
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "打包脚本执行失败。" -ForegroundColor Red
-        exit 1
-    }
-} else {
-    Write-Host "警告：未找到 publish_for_win.bat，将手动复制必要文件。" -ForegroundColor Yellow
-    # 手动复制：可执行文件、Qt 依赖、scrcpy-server 等
-    $binDir = ".\$BuildConfig"
-    Copy-Item "$binDir\QtScrcpy.exe" $packageDir
-    # 复制 Qt 依赖（使用 windeployqt，如果可用）
-    $windeployqt = "$QtInstallRoot\bin\windeployqt.exe"
-    if (Test-Path $windeployqt) {
-        & $windeployqt --dir $packageDir $packageDir\QtScrcpy.exe
-    } else {
-        Write-Host "警告：未找到 windeployqt，请手动复制 Qt DLL。" -ForegroundColor Yellow
-    }
-    # 复制其他必要文件（如 scrcpy-server、配置文件等）
-    # 这里可以根据需要补充
-}
-
-Write-Host "创建 ZIP 压缩包..."
-$zipFile = "$packageDir.zip"
-Compress-Archive -Path $packageDir -DestinationPath $zipFile -Force
-Write-Host "打包完成：$zipFile"
-
-Write-Host "所有步骤成功完成！" -ForegroundColor Green
+      - name: Upload Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ci\build\${{ steps.package.outputs.package-name }}.zip
+          asset_name: ${{ steps.package.outputs.package-name }}.zip
+          tag: ${{ github.ref }}
+          overwrite: true
