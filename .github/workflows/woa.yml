@@ -8,6 +8,11 @@ on:
         required: true
         default: '6.7.0'
         type: string
+      qt-modules:
+        description: 'Additional Qt modules (space-separated, e.g., qtmultimedia qtimageformats)'
+        required: false
+        default: ''
+        type: string
       use-mirror:
         description: 'Qt mirror (leave empty for default, e.g., https://mirrors.tuna.tsinghua.edu.cn/qt)'
         required: false
@@ -48,17 +53,30 @@ jobs:
         run: |
           $qtVer = "${{ env.qt-ver }}"
           $outDir = "C:\Qt\$qtVer"
-
           Write-Host "=== Installing Qt x64 (desktop) ==="
           aqt install-qt windows desktop $qtVer win64_msvc2019_64 --outputdir $outDir
-
           Write-Host "=== Installing Qt arm64 (cross-compile) ==="
-          aqt install-qt windows desktop $qtVer win64_msvc2019_arm64 --outputdir $outDir
+          $modules = "${{ inputs.qt-modules }}".Trim()
+          if ($modules) {
+            aqt install-qt windows desktop $qtVer win64_msvc2019_arm64 --outputdir $outDir --modules $modules
+          } else {
+            aqt install-qt windows desktop $qtVer win64_msvc2019_arm64 --outputdir $outDir
+          }
 
-          # 设置环境变量（供后续构建使用）
-          echo "QT_INSTALL_PATH=$outDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "CMAKE_PREFIX_PATH=$outDir\$qtVer\win64_msvc2019_arm64" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PATH=$outDir\$qtVer\win64_msvc2019_arm64\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # 查找 arm64 的 Qt CMake 配置目录
+          $qtArm64Dir = "$outDir\$qtVer\win64_msvc2019_arm64"
+          if (Test-Path "$qtArm64Dir\lib\cmake\Qt6") {
+            $cmakePrefix = "$qtArm64Dir\lib\cmake\Qt6"
+          } elseif (Test-Path "$qtArm64Dir\lib\cmake\Qt5") {
+            $cmakePrefix = "$qtArm64Dir\lib\cmake\Qt5"
+          } else {
+            Write-Error "Qt cmake directory not found in $qtArm64Dir"
+            exit 1
+          }
+          Write-Host "CMAKE_PREFIX_PATH = $cmakePrefix"
+          echo "CMAKE_PREFIX_PATH=$cmakePrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "QT_DIR=$cmakePrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PATH=$qtArm64Dir\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Get the version (for tag)
         id: get-version
@@ -70,6 +88,8 @@ jobs:
 
       - name: Build with CMake
         run: |
+          Write-Host "CMAKE_PREFIX_PATH = $env:CMAKE_PREFIX_PATH"
+          Write-Host "QT_DIR = $env:QT_DIR"
           mkdir build
           cd build
           cmake .. -DCMAKE_PREFIX_PATH="$env:CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release -A ARM64
@@ -82,7 +102,7 @@ jobs:
           mkdir output\artifacts -Force
           # 假设构建输出在 build\Release\ 下，将所有可执行文件和依赖打包
           7z a -tzip "output\artifacts\$artifactName.zip" ".\build\Release\*.exe" ".\build\Release\*.dll"
-          # 如果项目有专门的打包脚本，可以在此调用
+          # 如果项目有自己的打包脚本，可以在此调用
           # .\ci\windows\package.bat
 
       - name: Upload binary artifact
