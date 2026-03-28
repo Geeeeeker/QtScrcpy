@@ -122,12 +122,13 @@ jobs:
               add-apt-repository -y universe
               apt-get update
 
-              # 核心必须包
+              # 核心必须包（普通开发包）
               apt-get install -y qt6-base-dev qt6-multimedia-dev || true
+              # 私有开发包（项目可能需要 Qt6::CorePrivate 等）
+              apt-get install -y qt6-base-private-dev qt6-multimedia-private-dev || true
               # 可选包（如果存在则安装，忽略失败）
-              apt-get install -y qt6-svg-dev || true
-              apt-get install -y qt6-declarative-dev || true
-              apt-get install -y qt6-tools-dev || true
+              apt-get install -y qt6-svg-dev qt6-declarative-dev qt6-tools-dev || true
+              apt-get install -y qt6-svg-private-dev qt6-declarative-private-dev || true
 
               # 设置 Qt 6 环境变量
               export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
