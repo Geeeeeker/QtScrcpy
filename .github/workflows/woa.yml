@@ -57,11 +57,14 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
         shell: bash
         run: |
+          set -e  # 确保任何错误都导致失败
+          echo "Installing Qt ${{ env.qt-ver }} ${{ env.qt-arch }} to ${{ env.qt-install-path }}"
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
+            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2 \
+            --verbose
+          echo "Installation command finished."
 
-      # 验证安装是否成功
       - name: Verify Qt installation
         if: steps.cache-qt.outputs.cache-hit != 'true'
         shell: bash
@@ -71,7 +74,7 @@ jobs:
             echo "✅ Qt installed successfully"
           else
             echo "❌ Qt installation failed, listing available directories:"
-            ls -R "${{ env.qt-install-path }}" 2>/dev/null || echo "No Qt directories found"
+            find "${{ env.qt-install-path }}" -type d 2>/dev/null || echo "No directories found"
             exit 1
           fi
 
