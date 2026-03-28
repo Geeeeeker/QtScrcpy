@@ -63,17 +63,27 @@ jobs:
             aqt install-qt windows desktop $qtVer win64_msvc2019_arm64 --outputdir $outDir
           }
 
-          # 查找 arm64 的 Qt CMake 配置目录
-          $qtArm64Dir = "$outDir\$qtVer\win64_msvc2019_arm64"
-          if (Test-Path "$qtArm64Dir\lib\cmake\Qt6") {
-            $cmakePrefix = "$qtArm64Dir\lib\cmake\Qt6"
+          # 动态查找 arm64 安装目录（实际可能是 msvc2019_arm64 或 win64_msvc2019_arm64）
+          $qtRoot = "$outDir\$qtVer"
+          $arm64Dir = Get-ChildItem -Path $qtRoot -Directory | Where-Object { $_.Name -like "*arm64*" } | Select-Object -First 1
+          if (-not $arm64Dir) {
+            Write-Error "Could not find arm64 installation directory in $qtRoot"
+            exit 1
+          }
+          $qtArm64Dir = $arm64Dir.FullName
+          Write-Host "Found arm64 Qt directory: $qtArm64Dir"
+
+          # 查找 CMake 配置目录
+          $cmakePrefix = "$qtArm64Dir\lib\cmake\Qt6"
+          if (Test-Path $cmakePrefix) {
+            Write-Host "Found Qt6 CMake config at $cmakePrefix"
           } elseif (Test-Path "$qtArm64Dir\lib\cmake\Qt5") {
             $cmakePrefix = "$qtArm64Dir\lib\cmake\Qt5"
+            Write-Host "Found Qt5 CMake config at $cmakePrefix"
           } else {
             Write-Error "Qt cmake directory not found in $qtArm64Dir"
             exit 1
           }
-          Write-Host "CMAKE_PREFIX_PATH = $cmakePrefix"
           echo "CMAKE_PREFIX_PATH=$cmakePrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "QT_DIR=$cmakePrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "PATH=$qtArm64Dir\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
