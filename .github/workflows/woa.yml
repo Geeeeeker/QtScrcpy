@@ -1,4 +1,4 @@
-name: Build for Windows ARM64
+name: Build for Windows ARM64 (Qt6)
 
 on:
   push:
@@ -14,9 +14,11 @@ jobs:
     env:
       target-name: QtScrcpy
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
-      qt-ver: '5.15.2'
-      qt-arch: 'win64_msvc2019_arm64'
-      msvc-arch: 'arm64'
+      # 使用 Qt 6.7.2 LTS（支持 Windows ARM64）
+      qt-ver: '6.7.2'
+      qt-arch: 'win64_msvc2022_arm64'      # Qt 6 对应 MSVC 2022 ARM64
+      msvc-arch: 'arm64'                   # MSVC 架构
+      qt-arch-install: 'win64_msvc2022_arm64'  # 安装子目录名
       qt-install-path: ${{ github.workspace }}/Qt
     steps:
       - name: Setup Python
@@ -30,7 +32,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.qt-install-path }}
-          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ env.qt-arch }}-v3
+          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-${{ env.qt-arch }}-v1
 
       - name: Install aqt (if cache miss)
         if: steps.cache-qt.outputs.cache-hit != 'true'
@@ -57,13 +59,13 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
         shell: bash
         run: |
-          set -e  # 确保任何错误都导致失败
+          set -e
           echo "Installing Qt ${{ env.qt-ver }} ${{ env.qt-arch }} to ${{ env.qt-install-path }}"
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
             --outputdir ${{ env.qt-install-path }} \
             --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2 \
             --verbose
-          echo "Installation command finished."
+          echo "Installation finished."
 
       - name: Verify Qt installation
         if: steps.cache-qt.outputs.cache-hit != 'true'
@@ -91,7 +93,7 @@ jobs:
         run: |
           QT_BASE="${{ env.qt-install-path }}/${{ env.qt-ver }}"
           # 尝试多种可能的架构名
-          POSSIBLE_ARCHS=("${{ env.qt-arch }}" "win64_msvc2019_arm64" "msvc2019_arm64" "arm64")
+          POSSIBLE_ARCHS=("${{ env.qt-arch }}" "win64_msvc2022_arm64" "msvc2022_arm64" "arm64")
           QT_ROOT=""
           for arch in "${POSSIBLE_ARCHS[@]}"; do
             if [ -d "$QT_BASE/$arch" ]; then
@@ -106,22 +108,27 @@ jobs:
             exit 1
           fi
 
-          # 查找 Qt5Config.cmake
-          QT5_CMAKE_DIR="$QT_ROOT/lib/cmake/Qt5"
-          if [ -f "$QT5_CMAKE_DIR/Qt5Config.cmake" ]; then
-            echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
+          # 查找 Qt6Config.cmake (Qt6)
+          QT6_CMAKE_DIR="$QT_ROOT/lib/cmake/Qt6"
+          if [ -f "$QT6_CMAKE_DIR/Qt6Config.cmake" ]; then
+            echo "✅ Found Qt6Config.cmake in $QT6_CMAKE_DIR"
+            echo "Qt6_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
+            echo "QT_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
           else
-            FOUND_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
+            # 尝试递归查找
+            FOUND_DIR=$(find "$QT_ROOT" -name "Qt6Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
             if [ -n "$FOUND_DIR" ]; then
-              QT5_CMAKE_DIR="$FOUND_DIR"
-              echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
+              QT6_CMAKE_DIR="$FOUND_DIR"
+              echo "✅ Found Qt6Config.cmake in $QT6_CMAKE_DIR"
+              echo "Qt6_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
+              echo "QT_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
             else
-              echo "⚠️ Qt5Config.cmake not found, using default path $QT5_CMAKE_DIR"
+              echo "⚠️ Qt6Config.cmake not found, using default path $QT6_CMAKE_DIR"
+              echo "Qt6_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
+              echo "QT_DIR=$QT6_CMAKE_DIR" >> $GITHUB_ENV
             fi
           fi
 
-          echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-          echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
           echo "$QT_ROOT/bin" >> $GITHUB_PATH
           echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV
@@ -134,15 +141,15 @@ jobs:
       - name: Verify Qt environment
         shell: bash
         run: |
-          echo "Qt5_DIR=$Qt5_DIR"
+          echo "Qt6_DIR=$Qt6_DIR"
           echo "QT_DIR=$QT_DIR"
           echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
           echo "ENV_QT_PATH=$ENV_QT_PATH"
-          if [ -f "$Qt5_DIR/Qt5Config.cmake" ]; then
-            echo "✅ Qt5Config.cmake exists at $Qt5_DIR/Qt5Config.cmake"
+          if [ -f "$Qt6_DIR/Qt6Config.cmake" ]; then
+            echo "✅ Qt6Config.cmake exists at $Qt6_DIR/Qt6Config.cmake"
           else
-            echo "❌ Qt5Config.cmake not found"
-            find "${{ env.qt-install-path }}" -name "Qt5Config.cmake" 2>/dev/null || true
+            echo "❌ Qt6Config.cmake not found"
+            find "${{ env.qt-install-path }}" -name "Qt6Config.cmake" 2>/dev/null || true
           fi
 
       - name: Build with CMake (direct)
