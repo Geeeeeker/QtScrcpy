@@ -1,4 +1,3 @@
-
 name: macOS arm64 Build & Release
 on:
   push:
@@ -10,7 +9,7 @@ on:
     paths:
       - 'QtScrcpy/**'
       - '!QtScrcpy/res/**'
-      - '.github/workflows/arm64.yml'
+      - '.github/workflows/macos.yml'
 
 jobs:
   build:
@@ -21,6 +20,11 @@ jobs:
       qt-version: 6.5.3
       qt-install-path: ${{ github.workspace }}/${{ env.qt-version }}
       platform-des: mac
+
+    strategy:
+      matrix:
+        qt-ver: [6.5.3]        # ✅ 直接写死，不引用 env
+        build-arch: [arm64]    # ✅ 只保留 arm64
 
     steps:
       - name: Checkout repository
@@ -40,7 +44,7 @@ jobs:
       - name: Install Qt 6.5.3 (arm64 only)
         uses: jurplel/install-qt-action@v4.1.1
         with:
-          version: ${{ env.qt-version }}
+          version: ${{ matrix.qt-ver }}     # ✅ 使用 matrix 值，而非 env
           modules: qtmultimedia
           arch: arm64
           cached: ${{ steps.cache-qt.outputs.cache-hit }}
@@ -54,7 +58,7 @@ jobs:
 
       - name: Build for arm64
         env:
-          ENV_QT_PATH: ${{ env.qt-install-path }}
+          ENV_QT_PATH: ${{ env.qt-install-path }}  # ✅ 正确使用 env
         run: |
           ci/mac/build_for_mac.sh RelWithDebInfo arm64
 
