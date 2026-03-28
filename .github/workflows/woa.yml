@@ -15,8 +15,7 @@ jobs:
       target-name: QtScrcpy
       vcvarsall-path: 'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
       qt-ver: '6.7.2'
-      qt-arch-arm64: 'win64_msvc2019_arm64'
-      qt-arch-x64: 'win64_msvc2019_64'
+      qt-arch: 'win64_msvc2019_arm64'
       msvc-arch: 'arm64'
       qt-install-path: ${{ github.workspace }}/Qt
     steps:
@@ -26,79 +25,52 @@ jobs:
           python-version: '3.11'
           architecture: 'x64'
 
-      - name: Cache Qt (combined x64+arm64)
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.qt-install-path }}
-          key: ${{ runner.os }}-Qt-${{ env.qt-ver }}-combined-v1
-
-      - name: Install aqt (if cache miss)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
+      # 不缓存，避免干扰
+      - name: Install aqt
         run: pip install aqtinstall
 
       - name: Set aqt mirror (清华源)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
         run: echo "AQT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/qt" >> $GITHUB_ENV
 
-      - name: Install x64 desktop Qt (required as base for ARM64)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
+      - name: List available architectures for Qt ${{ env.qt-ver }}
         shell: bash
         run: |
-          set -e
-          echo "Installing x64 desktop Qt ${{ env.qt-ver }} ${{ env.qt-arch-x64 }}"
-          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch-x64 }} \
-            --outputdir ${{ env.qt-install-path }}
-          echo "x64 installation finished."
+          aqt list-qt windows desktop --arch ${{ env.qt-ver }}
 
       - name: List available modules for ARM64
-        if: steps.cache-qt.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          echo "Available modules for ARM64:"
-          aqt list-qt windows desktop --modules ${{ env.qt-ver }} ${{ env.qt-arch-arm64 }} || echo "No modules listed"
+          aqt list-qt windows desktop --modules ${{ env.qt-ver }} ${{ env.qt-arch }}
 
-      - name: Install Qt ARM64
-        if: steps.cache-qt.outputs.cache-hit != 'true'
+      - name: Install Qt ARM64 with verbose output
         shell: bash
         run: |
           set -e
-          echo "Installing Qt ${{ env.qt-ver }} ${{ env.qt-arch-arm64 }}"
-          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch-arm64 }} \
-            --outputdir ${{ env.qt-install-path }}
-          echo "ARM64 installation finished."
+          aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
+            --outputdir ${{ env.qt-install-path }} -v
+          echo "Installation command finished."
 
-      - name: Verify combined Qt installation
-        if: steps.cache-qt.outputs.cache-hit != 'true'
+      - name: Verify and list Qt installation
         shell: bash
         run: |
-          echo "Checking x64 installation:"
-          if [ -d "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-x64 }}" ]; then
-            echo "✅ x64 Qt installed"
+          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch }}"
+          echo "Expected Qt root: $QT_ROOT"
+          if [ -d "$QT_ROOT" ]; then
+            echo "✅ Qt installed successfully"
+            echo "Directory contents:"
+            find "$QT_ROOT" -maxdepth 2 -type d
           else
-            echo "❌ x64 Qt missing"
-          fi
-          echo "Checking ARM64 installation:"
-          if [ -d "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-arm64 }}" ]; then
-            echo "✅ ARM64 Qt installed"
-          else
-            echo "❌ ARM64 Qt missing"
-            find "${{ env.qt-install-path }}" -maxdepth 3 -type d 2>/dev/null || true
+            echo "❌ Qt installation failed, listing available directories:"
+            find "${{ env.qt-install-path }}" -maxdepth 3 -type d 2>/dev/null || echo "No directories found"
             exit 1
           fi
-
-      - name: Skip if architecture unavailable
-        if: steps.cache-qt.outputs.cache-hit != 'true' && failure()
-        run: |
-          echo "ARM64 Qt installation failed, skipping build."
-          exit 1
 
       - name: Setup Qt environment
         id: setup-qt
         shell: bash
         run: |
           QT_BASE="${{ env.qt-install-path }}/${{ env.qt-ver }}"
-          QT_ROOT="$QT_BASE/${{ env.qt-arch-arm64 }}"
+          QT_ROOT="$QT_BASE/${{ env.qt-arch }}"
           if [ ! -d "$QT_ROOT" ]; then
             echo "❌ Could not find ARM64 Qt at $QT_ROOT"
             exit 1
