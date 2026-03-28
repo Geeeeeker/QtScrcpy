@@ -17,7 +17,6 @@ jobs:
       qt-ver: '5.15.2'
       qt-arch: 'win64_msvc2019_arm64'
       msvc-arch: 'arm64'
-      qt-arch-install: 'win64_msvc2019_arm64'
       qt-install-path: ${{ github.workspace }}/Qt
     steps:
       - name: Setup Python
@@ -62,43 +61,64 @@ jobs:
             --outputdir ${{ env.qt-install-path }} \
             --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
 
+      # 验证安装是否成功
+      - name: Verify Qt installation
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "Expected Qt root: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch }}"
+          if [ -d "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch }}" ]; then
+            echo "✅ Qt installed successfully"
+          else
+            echo "❌ Qt installation failed, listing available directories:"
+            ls -R "${{ env.qt-install-path }}" 2>/dev/null || echo "No Qt directories found"
+            exit 1
+          fi
+
       - name: Skip if architecture unavailable
         if: steps.check-arch.outputs.available == 'false'
         run: |
           echo "Architecture ${{ env.qt-arch }} not available, skipping build."
           exit 0
 
-      # ---------- 关键修复：独立的环境设置步骤，始终运行 ----------
+      # ---------- 动态查找 Qt 根目录 ----------
       - name: Setup Qt environment
         id: setup-qt
         shell: bash
         run: |
-          QT_ROOT="${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}"
-          if [ ! -d "$QT_ROOT" ]; then
-            echo "❌ Qt installation not found at $QT_ROOT"
+          QT_BASE="${{ env.qt-install-path }}/${{ env.qt-ver }}"
+          # 尝试多种可能的架构名
+          POSSIBLE_ARCHS=("${{ env.qt-arch }}" "win64_msvc2019_arm64" "msvc2019_arm64" "arm64")
+          QT_ROOT=""
+          for arch in "${POSSIBLE_ARCHS[@]}"; do
+            if [ -d "$QT_BASE/$arch" ]; then
+              QT_ROOT="$QT_BASE/$arch"
+              echo "Found Qt at: $QT_ROOT"
+              break
+            fi
+          done
+          if [ -z "$QT_ROOT" ]; then
+            echo "❌ Could not find Qt installation. Listing contents of $QT_BASE:"
+            ls -la "$QT_BASE" 2>/dev/null || echo "No Qt directories found"
             exit 1
           fi
 
-          # 尝试直接定位 Qt5Config.cmake
+          # 查找 Qt5Config.cmake
           QT5_CMAKE_DIR="$QT_ROOT/lib/cmake/Qt5"
           if [ -f "$QT5_CMAKE_DIR/Qt5Config.cmake" ]; then
             echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
-            echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-            echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
           else
-            # 尝试递归查找
             FOUND_DIR=$(find "$QT_ROOT" -name "Qt5Config.cmake" -printf "%h\n" -quit 2>/dev/null || echo "")
             if [ -n "$FOUND_DIR" ]; then
-              echo "✅ Found Qt5Config.cmake in $FOUND_DIR"
-              echo "Qt5_DIR=$FOUND_DIR" >> $GITHUB_ENV
-              echo "QT_DIR=$FOUND_DIR" >> $GITHUB_ENV
+              QT5_CMAKE_DIR="$FOUND_DIR"
+              echo "✅ Found Qt5Config.cmake in $QT5_CMAKE_DIR"
             else
               echo "⚠️ Qt5Config.cmake not found, using default path $QT5_CMAKE_DIR"
-              echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
-              echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
             fi
           fi
 
+          echo "Qt5_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
+          echo "QT_DIR=$QT5_CMAKE_DIR" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=$QT_ROOT" >> $GITHUB_ENV
           echo "$QT_ROOT/bin" >> $GITHUB_PATH
           echo "ENV_QT_PATH=$QT_ROOT" >> $GITHUB_ENV
@@ -126,7 +146,7 @@ jobs:
         shell: cmd
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}
+          ENV_QT_PATH: ${{ env.ENV_QT_PATH }}
         run: |
           call python ci\generate-version.py
           call "%ENV_VCVARSALL%" ${{ env.msvc-arch }}
@@ -146,7 +166,7 @@ jobs:
         env:
           ENV_VCVARSALL: ${{ env.vcvarsall-path }}
           ENV_VCINSTALL: ${{ env.vcinstall-path }}
-          ENV_QT_PATH: ${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch-install }}
+          ENV_QT_PATH: ${{ env.ENV_QT_PATH }}
           publish_name: ${{ env.target-name }}-win-${{ env.msvc-arch }}-${{ steps.get-version.outputs.version }}
         run: |
           cmd.exe /c ci\win\publish_for_win.bat ${{ env.msvc-arch }} ..\build\${{ env.publish_name }}
