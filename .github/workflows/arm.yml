@@ -1,86 +1,112 @@
-
-name: Build QtScrcpy ARM/ARM64
+name: Build & Release QtScrcpy (Manual)
 
 on:
-  push:
-    paths:
-      - 'QtScrcpy/**'
-      - '!QtScrcpy/res/**'
-      - '.github/workflows/build-qtscrcpy-arm.yml'
-      - 'ci/linux/**'
-  pull_request:
-    paths:
-      - 'QtScrcpy/**'
-      - '!QtScrcpy/res/**'
-      - '.github/workflows/build-qtscrcpy-arm.yml'
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Select target architecture'
+        required: true
+        type: choice
+        options:
+          - arm64
+          - arm32
+      qt_version:
+        description: 'Select Qt version'
+        required: true
+        default: '6.5.3'
+        type: choice
+        options:
+          - '6.5.3'
+          - '6.7.0'
+      release_tag:
+        description: 'Release tag (e.g., v1.8.0-arm64)'
+        required: true
+        default: 'v1.8.0-arm64'
 
 jobs:
-  build:
-    name: Build QtScrcpy for ARM
+  build-and-release:
+    name: Build for ${{ github.event.inputs.architecture }}
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        arch: [arm64]
-        qt_ver: [6.5.3]
     env:
-      target_name: QtScrcpy
-      qt_install_path: ${{ github.workspace }}/qt
-      platform_desc: ubuntu-${{ matrix.arch }}
+      TARGET_ARCH: ${{ github.event.inputs.architecture }}
+      QT_VERSION: ${{ github.event.inputs.qt_version }}
+      RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+      QT_INSTALL_PATH: ${{ github.workspace }}/qt
+      BUILD_DIR: ${{ github.workspace }}/output/${{ github.event.inputs.architecture }}/Release
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
 
       - name: Set up QEMU for ARM emulation
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm64
+          platforms: ${{ github.event.inputs.architecture }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake g++ git wget libgl1-mesa-dev libxcb-xinerama0
 
-      - name: Download Qt installer for ARM64
+      - name: Download Qt installer
         run: |
-          wget https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/online_installers/qt-online-installer-linux-arm64-online.run -O qt-installer.run
+          if [[ "${{ github.event.inputs.architecture }}" == "arm64" ]]; then
+            wget https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/online_installers/qt-online-installer-linux-arm64-online.run -O qt-installer.run
+          else
+            wget https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/online_installers/qt-online-installer-linux-arm32-online.run -O qt-installer.run
+          fi
           chmod +x qt-installer.run
 
-      - name: Install Qt for ARM64
+      - name: Install Qt
         run: |
           ./qt-installer.run \
-            --root-path ${{ env.qt_install_path }} \
+            --root-path ${{ env.QT_INSTALL_PATH }} \
             --accept-license \
             --accept-optional-components \
             --no-force-installation \
             --verbose \
-            --add-component qt.qt6.${{ matrix.qt_ver }}.arm64 \
-            --add-component qt.qt6.${{ matrix.qt_ver }}.qtmultimedia \
-            --add-component qt.qt6.${{ matrix.qt_ver }}.qtdeclarative \
+            --add-component qt.qt6.${{ env.QT_VERSION }}.${{ env.TARGET_ARCH }} \
+            --add-component qt.qt6.${{ env.QT_VERSION }}.qtmultimedia \
+            --add-component qt.qt6.${{ env.QT_VERSION }}.qtdeclarative \
             --add-component qt.tools.cmake \
             --add-component qt.tools.ninja
 
-      - name: Build QtScrcpy for ARM64
+      - name: Build QtScrcpy
         env:
-          ENV_QT_PATH: ${{ env.qt_install_path }}/Tools/QtCreator/bin
+          QT_PATH: ${{ env.QT_INSTALL_PATH }}/${{ env.QT_VERSION }}/gcc_${{ env.TARGET_ARCH == 'arm64' && '64' || '32' }}
+          PATH: ${{ env.QT_PATH }}/bin:$PATH
         run: |
-          export QT_PATH=${{ env.qt_install_path }}/${{ matrix.qt_ver }}/gcc_64
-          export PATH=$QT_PATH/bin:$PATH
-          mkdir -p output/${{ matrix.arch }}/Release
+          mkdir -p ${{ env.BUILD_DIR }}
           ./ci/linux/build_for_linux.sh "Release"
 
-      - name: Package ARM64 build
+      - name: Package release artifact
         run: |
-          cd output/${{ matrix.arch }}/Release
-          zip -r ../../../QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}.zip QtScrcpy scrcpy-server
+          cd ${{ env.BUILD_DIR }}
+          zip -r ../../../QtScrcpy-ubuntu-${{ env.TARGET_ARCH }}-${{ env.QT_VERSION }}.zip QtScrcpy scrcpy-server
 
-      - name: Upload ARM64 artifacts
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        if: github.event_name == 'workflow_dispatch'
         with:
-          name: QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}
-          path: QtScrcpy-ubuntu-${{ matrix.arch }}-${{ matrix.qt_ver }}.zip
+          tag_name: ${{ env.RELEASE_TAG }}
+          release_name: QtScrcpy ${{ env.RELEASE_TAG }}
+          body: |
+            Built for &zwnj;**${{ env.TARGET_ARCH }}**&zwnj; on Ubuntu 22.04 with Qt ${{ env.QT_VERSION }}
+            - Built on: ${{ github.sha }}
+            - Triggered manually via workflow_dispatch
+          draft: false
+          prerelease: false
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./QtScrcpy-ubuntu-${{ env.TARGET_ARCH }}-${{ env.QT_VERSION }}.zip
+          asset_name: QtScrcpy-ubuntu-${{ env.TARGET_ARCH }}-${{ env.QT_VERSION }}.zip
+          asset_content_type: application/zip
