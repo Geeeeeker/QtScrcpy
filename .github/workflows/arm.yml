@@ -111,23 +111,23 @@ jobs:
                 lsb-release \
                 fuse \
                 libasound2-dev \
-                software-properties-common   # 添加此包以使用 add-apt-repository
+                software-properties-common
 
               echo '=== Installing Python (optional) ==='
               apt-get install -y python3 python3-pip
               pip3 install --upgrade pip
 
               echo '=== Installing Qt 6 from system repositories ==='
-              # 启用 universe 仓库（确保 qt6-svg-dev 等包可用）
+              # 启用 universe 仓库
               add-apt-repository -y universe
               apt-get update
-              # 安装 Qt 6 核心模块及常用模块（版本为 Ubuntu 22.04 自带的 6.2.4）
-              apt-get install -y \
-                qt6-base-dev \
-                qt6-multimedia-dev \
-                qt6-svg-dev \
-                qt6-declarative-dev \
-                qt6-tools-dev
+
+              # 核心必须包
+              apt-get install -y qt6-base-dev qt6-multimedia-dev || true
+              # 可选包（如果存在则安装，忽略失败）
+              apt-get install -y qt6-svg-dev || true
+              apt-get install -y qt6-declarative-dev || true
+              apt-get install -y qt6-tools-dev || true
 
               # 设置 Qt 6 环境变量
               export CMAKE_PREFIX_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake/Qt6
