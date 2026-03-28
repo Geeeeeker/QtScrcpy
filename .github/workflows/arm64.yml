@@ -1,0 +1,87 @@
+
+name: macOS arm64 Build & Release
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'QtScrcpy/**'
+      - '!QtScrcpy/res/**'
+      - '.github/workflows/macos.yml'
+
+jobs:
+  build:
+    name: Build QtScrcpy for macOS arm64
+    runs-on: macos-14
+    env:
+      target-name: QtScrcpy
+      qt-version: 6.5.3
+      qt-install-path: ${{ github.workspace }}/${{ env.qt-version }}
+      platform-des: mac
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+          ssh-key: ${{ secrets.BOT_SSH_KEY }}
+
+      - name: Cache Qt installation
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.qt-install-path }}/arm64
+          key: ${{ runner.os }}-${{ env.qt-version }}-arm64
+
+      - name: Install Qt 6.5.3 (arm64 only)
+        uses: jurplel/install-qt-action@v4.1.1
+        with:
+          version: ${{ env.qt-version }}
+          modules: qtmultimedia
+          arch: arm64
+          cached: ${{ steps.cache-qt.outputs.cache-hit }}
+
+      - name: Generate version
+        id: get-version
+        shell: bash
+        run: |
+          python ci/generate-version.py
+          echo "::set-output name=version::$(git describe --tags --always --dirty)"
+
+      - name: Build for arm64
+        env:
+          ENV_QT_PATH: ${{ env.qt-install-path }}
+        run: |
+          ci/mac/build_for_mac.sh RelWithDebInfo arm64
+
+      - name: Package as .dmg
+        id: package
+        env:
+          ENV_QT_PATH: ${{ env.qt-install-path }}
+          publish-name: ${{ env.target-name }}-${{ env.platform-des }}-arm64-${{ steps.get-version.outputs.version }}
+        run: |
+          ci/mac/publish_for_mac.sh ../build arm64
+          ci/mac/package_for_mac.sh
+          mv ci/build/QtScrcpy.app ci/build/${{ env.publish-name }}.app
+          mv ci/build/QtScrcpy.dmg ci/build/${{ env.publish-name }}.dmg
+          echo "::set-output name=package-name::${{ env.publish-name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.package-name }}.dmg
+          path: ci/build/${{ steps.package.outputs.package-name }}.dmg
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ci/build/${{ steps.package.outputs.package-name }}.dmg
+          asset_name: ${{ steps.package.outputs.package-name }}.dmg
+          tag: ${{ github.ref }}
+          overwrite: true
