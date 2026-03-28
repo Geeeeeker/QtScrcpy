@@ -61,9 +61,15 @@ jobs:
           set -e
           echo "Installing Qt ${{ env.qt-ver }} ${{ env.qt-arch }} to ${{ env.qt-install-path }}"
           aqt install-qt windows desktop ${{ env.qt-ver }} ${{ env.qt-arch }} \
-            --outputdir ${{ env.qt-install-path }} \
-            --modules qtbase qtsvg qttools qtdeclarative qtquickcontrols2
+            --outputdir ${{ env.qt-install-path }}
           echo "Installation finished."
+
+      - name: List installed Qt modules (debug)
+        if: steps.cache-qt.outputs.cache-hit != 'true' && steps.check-arch.outputs.available == 'true'
+        shell: bash
+        run: |
+          echo "Listing contents of Qt installation:"
+          find "${{ env.qt-install-path }}/${{ env.qt-ver }}/${{ env.qt-arch }}" -maxdepth 2 -type d
 
       - name: Verify Qt installation
         if: steps.cache-qt.outputs.cache-hit != 'true'
