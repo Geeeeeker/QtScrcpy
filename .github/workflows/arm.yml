@@ -110,15 +110,15 @@ jobs:
                 gnupg \
                 lsb-release \
                 fuse \
-                libasound2-dev
+                libasound2-dev \
+                software-properties-common   # 添加此包以使用 add-apt-repository
 
-              echo '=== Installing Python and aqt (optional) ==='
+              echo '=== Installing Python (optional) ==='
               apt-get install -y python3 python3-pip
               pip3 install --upgrade pip
-              pip3 install 'aqtinstall>=3.3'
 
               echo '=== Installing Qt 6 from system repositories ==='
-              # 启用 universe 仓库（包含 qt6-svg 等）
+              # 启用 universe 仓库（确保 qt6-svg-dev 等包可用）
               add-apt-repository -y universe
               apt-get update
               # 安装 Qt 6 核心模块及常用模块（版本为 Ubuntu 22.04 自带的 6.2.4）
